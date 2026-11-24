@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { soundEngine } from '../audio/soundEngine';
 import { exportThumbnailJpg } from '../canvas/quizRenderer';
+import { exportStoryThumbnailJpg } from '../canvas/storyRenderer';
 import {
   EXPORT_QUALITY_TIERS,
   ExportCapabilitiesReport,
@@ -47,6 +48,7 @@ import {
   ExportResolutionPreference,
   ExportResult,
   exportQuizVideo,
+  exportStoryVideo,
 } from '../canvas/videoExporter';
 import { YoutubePublishKit, generateYoutubePublishKit } from '../services/aiClient';
 import {
@@ -62,6 +64,7 @@ import {
 import {
   QuizProject,
   computeProjectTimeline,
+  computeStoryTimeline,
   getCanvasDimensions,
 } from '../types/quiz';
 import {
@@ -103,7 +106,7 @@ interface ExportVideoModalProps extends SharedYouTubeProps {
   onClose: () => void;
 }
 
-type ExportScopeMode = 'full' | 'single' | 'splitBatch';
+type ExportScopeMode = 'full' | 'single' | 'splitBatch' | 'chunkBatch';
 
 export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
   isOpen,
@@ -138,6 +141,7 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
   const [qualityTier, setQualityTier] = useState<ExportQualityTier>('balanced');
   const [includeAudio, setIncludeAudio] = useState<boolean>(true);
   const [selectedSlideIdx, setSelectedSlideIdx] = useState(0);
+  const [chunkSize, setChunkSize] = useState<3 | 5 | 10>(5);
 
   const [sessionState, setSessionState] = useState<ExportSessionState>('idle');
   const [capabilities, setCapabilities] = useState<ExportCapabilitiesReport | null>(null);
@@ -248,7 +252,14 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
       // ignore
     }
     const activeProject = projectRef.current;
-    if (activeProject.slides.length === 0) {
+    const isStoryMode = activeProject.studioMode === 'storyStudio';
+    if (isStoryMode) {
+      if ((activeProject.storyScenes ?? []).length === 0) {
+        setErrorMsg('لا توجد مشاهد قصة صالحة للتصدير.');
+        setSessionState('failed');
+        return;
+      }
+    } else if (activeProject.slides.length === 0) {
       setErrorMsg('لا توجد أسئلة صالحة للتصدير.');
       setSessionState('failed');
       return;
@@ -273,37 +284,53 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
         ? [activeProject.slides[slideIdx]]
         : activeProject.slides;
 
-    void exportQuizVideo(
-      targetSlides,
-      activeProject.template,
-      activeProject.timing,
-      activeProject.audio,
-      (p) => {
-        if (!session.isCurrent() || session.controller.signal.aborted) return;
-        progressRatioRef.current = p.progress;
-        setProgress(p);
-        if (p.stage === 'finalizing') {
-          setSessionState('finalizing');
-        } else if (p.stage === 'rendering') {
-          setSessionState('rendering');
-        } else if (p.stage === 'preparing') {
-          setSessionState('preparing');
-        }
-      },
-      session.controller.signal,
-      {
-        formatPreference: overrideFormat ?? formatPref,
-        resolutionPreference: overrideRes ?? resPref,
-        qualityTier: overrideQuality ?? qualityTier,
-        includeAudio: overrideAudio ?? includeAudio,
-        getPreviewCanvas: () => livePreviewCanvasRef.current,
+    const exportOptions = {
+      formatPreference: overrideFormat ?? formatPref,
+      resolutionPreference: overrideRes ?? resPref,
+      qualityTier: overrideQuality ?? qualityTier,
+      includeAudio: overrideAudio ?? includeAudio,
+      getPreviewCanvas: () => livePreviewCanvasRef.current,
+    };
+
+    const onExportProgress = (p: ExportProgress) => {
+      if (!session.isCurrent() || session.controller.signal.aborted) return;
+      progressRatioRef.current = p.progress;
+      setProgress(p);
+      if (p.stage === 'finalizing') {
+        setSessionState('finalizing');
+      } else if (p.stage === 'rendering') {
+        setSessionState('rendering');
+      } else if (p.stage === 'preparing') {
+        setSessionState('preparing');
       }
-    )
+    };
+
+    const exportTask = isStoryMode
+      ? exportStoryVideo(
+          activeProject,
+          onExportProgress,
+          session.controller.signal,
+          exportOptions
+        )
+      : exportQuizVideo(
+          targetSlides,
+          activeProject.template,
+          activeProject.timing,
+          activeProject.audio,
+          onExportProgress,
+          session.controller.signal,
+          exportOptions
+        );
+
+    void exportTask
       .then(async (res) => {
         if (!session.isCurrent() || session.controller.signal.aborted) return;
         const url = URL.createObjectURL(res.blob);
-        const prefix =
-          mode === 'single' ? `quiz-slide-${slideIdx + 1}` : 'youtube-short-quiz';
+        const prefix = isStoryMode
+          ? 'story-cinema-3d'
+          : mode === 'single'
+            ? `quiz-slide-${slideIdx + 1}`
+            : 'youtube-short-quiz';
         const generatedName = `${prefix}-${Date.now()}.${res.extension || 'mp4'}`;
         setResult(res);
         setVideoUrl(url);
@@ -450,6 +477,110 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
     }
   };
 
+  const startChunkBatchExport = async (
+    overrideFormat?: ExportFormatPreference,
+    overrideRes?: ExportResolutionPreference,
+    overrideQuality?: ExportQualityTier,
+    overrideAudio?: boolean
+  ) => {
+    try {
+      soundEngine.getContext();
+    } catch {
+      // ignore
+    }
+    const activeProject = projectRef.current;
+    if (activeProject.slides.length === 0) return;
+
+    const chunks: typeof activeProject.slides[] = [];
+    for (let i = 0; i < activeProject.slides.length; i += chunkSize) {
+      chunks.push(activeProject.slides.slice(i, i + chunkSize));
+    }
+    if (chunks.length === 0) return;
+
+    const session = exportSessionManager.beginSession(activeProject.id);
+    activeSessionRef.current = session;
+
+    resetExportOutputs();
+    setSessionState('preparing');
+
+    try {
+      let lastRes: ExportResult | null = null;
+      let lastFile = '';
+      for (let i = 0; i < chunks.length; i++) {
+        if (!session.isCurrent() || session.controller.signal.aborted) return;
+        const packSlides = chunks[i];
+        const res = await exportQuizVideo(
+          packSlides,
+          activeProject.template,
+          activeProject.timing,
+          activeProject.audio,
+          (p) => {
+            if (!session.isCurrent() || session.controller.signal.aborted) return;
+            const overall = (i + p.progress) / chunks.length;
+            progressRatioRef.current = overall;
+            setProgress({
+              progress: overall,
+              currentTime: p.currentTime,
+              totalDuration: p.totalDuration,
+              statusText: `حزمة ${i + 1} من ${chunks.length} (${packSlides.length} شرائح): ${p.statusText || 'جارٍ التصدير...'}`,
+              stage: p.stage,
+              engineLabel: p.engineLabel,
+              fallbackNotice: p.fallbackNotice,
+            });
+            setSessionState(
+              p.stage === 'finalizing'
+                ? 'finalizing'
+                : p.stage === 'preparing'
+                  ? 'preparing'
+                  : 'rendering'
+            );
+          },
+          session.controller.signal,
+          {
+            formatPreference: overrideFormat ?? formatPref,
+            resolutionPreference: overrideRes ?? resPref,
+            qualityTier: overrideQuality ?? qualityTier,
+            includeAudio: overrideAudio ?? includeAudio,
+            getPreviewCanvas: () => livePreviewCanvasRef.current,
+          }
+        );
+        if (!session.isCurrent() || session.controller.signal.aborted) return;
+        setSessionState('saving');
+        const fileName = `quiz-pack-${i + 1}-of-${chunks.length}-${Date.now()}.${res.extension || 'mp4'}`;
+        const packSave = await saveOrDownloadBlob(res.blob, fileName, res.mimeType, {
+          signal: session.controller.signal,
+        });
+        if (!packSave.ok) {
+          throw new Error(packSave.error || `تعذر حفظ الحزمة رقم ${i + 1} على الجهاز`);
+        }
+        lastRes = res;
+        lastFile = packSave.fileName || fileName;
+        setBatchDoneCount(i + 1);
+      }
+
+      if (lastRes && session.isCurrent() && !session.controller.signal.aborted) {
+        const url = URL.createObjectURL(lastRes.blob);
+        setResult(lastRes);
+        setVideoUrl(url);
+        setExportedFileName(lastFile);
+        setElapsedMs(Math.max(0, performance.now() - session.startedAt));
+        setEstimatedRemainingMs(0);
+        exportSessionManager.finishSession(activeProject.id, session.sessionId);
+        setSessionState('completed');
+        setSaveNotice(`تم تصدير وحفظ ${chunks.length} فيديوهات مجمّعة بنجاح.`);
+      }
+    } catch (err: unknown) {
+      if (!session.isCurrent()) return;
+      exportSessionManager.finishSession(activeProject.id, session.sessionId);
+      if (session.controller.signal.aborted) {
+        setSessionState('cancelled');
+        return;
+      }
+      setErrorMsg(formatExportErrorMessage(err));
+      setSessionState('failed');
+    }
+  };
+
   useEffect(() => {
     const projectId = projectRef.current.id;
     if (!isOpen) {
@@ -490,8 +621,10 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
 
   if (!isOpen) return null;
 
+  const isStoryStudio = project.studioMode === 'storyStudio';
   const fileName =
-    exportedFileName || `youtube-short-quiz-${Date.now()}.${result?.extension || 'mp4'}`;
+    exportedFileName ||
+    `${isStoryStudio ? 'story-cinema-3d' : 'youtube-short-quiz'}-${Date.now()}.${result?.extension || 'mp4'}`;
 
   const handleDownload = async () => {
     if (!result || isSaving) return;
@@ -515,6 +648,34 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
     if (isCapturingThumb) return;
     setIsCapturingThumb(true);
     try {
+      if (isStoryStudio) {
+        const scenes = project.storyScenes ?? [];
+        const schedules = computeStoryTimeline(
+          scenes,
+          project.timing,
+          project.storySettings,
+          project.template
+        );
+        const sched = schedules[0];
+        const firstLine = sched?.lines?.[0];
+        const captureTime = firstLine
+          ? firstLine.startTime + Math.min(0.9, firstLine.duration * 0.4)
+          : sched
+            ? sched.startTime + Math.min(1.2, sched.duration * 0.3)
+            : 0.6;
+        const blob = await exportStoryThumbnailJpg(project, captureTime);
+        if (blob) {
+          const thumbName = `story-cover-${Date.now()}.jpg`;
+          const res = await saveOrDownloadBlob(blob, thumbName, 'image/jpeg');
+          if (res.ok) {
+            setSaveNotice('تم حفظ صورة الغلاف (JPG) بدقة الفيديو الكاملة.');
+          } else if (res.error) {
+            setSaveNotice(`تعذر حفظ الغلاف: ${res.error}`);
+          }
+        }
+        return;
+      }
+
       const targetIdx = scopeMode === 'single' ? selectedSlideIdx : 0;
       const targetSlides =
         scopeMode === 'single' && project.slides[targetIdx]
@@ -626,11 +787,26 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
     setIsGeneratingKit(true);
     setKitError('');
     try {
-      const targetSlides = getActiveTargetSlides();
+      const targetSlides = isStoryStudio
+        ? (project.storyScenes ?? []).map((sc, idx) => ({
+            id: sc.id,
+            slideType: 'story' as const,
+            badgeText: `المشهد ${idx + 1}`,
+            question: `${sc.title || `مشهد ${idx + 1}`}: ${(sc.lines[0]?.text || '').slice(0, 90)}`,
+            options: [
+              sc.lines[0]?.text || '',
+              sc.lines[1]?.text || '',
+              sc.lines[2]?.text || '',
+              sc.lines[3]?.text || '',
+            ] as [string, string, string, string],
+            correctIndex: 0 as const,
+            explanationText: project.storySettings?.endMoralTitle || '',
+          }))
+        : getActiveTargetSlides();
       const generated = await generateYoutubePublishKit(
         targetSlides,
         project.template.aspectRatio,
-        project.template.showIntroHook ? project.template.introHookText : undefined
+        project.template.showIntroHook ? project.template.introHookText : project.storyTitle
       );
       const hashtagsLine = generated.hashtags.join(' ');
       const fullDescription =
@@ -898,13 +1074,13 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
             </div>
           </div>
 
-          {/* Export Scope Switcher */}
-          {project.slides.length > 1 && (
-            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+          {/* Export Scope Switcher (Quiz Studio only) */}
+          {!isStoryStudio && project.slides.length > 1 && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
               <button
                 type="button"
                 onClick={() => handleSwitchScope('full')}
-                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
                   scopeMode === 'full'
                     ? 'bg-[#00B050] text-white'
                     : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
@@ -915,7 +1091,7 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleSwitchScope('single')}
-                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
                   scopeMode === 'single'
                     ? 'bg-[#00B050] text-white'
                     : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
@@ -926,7 +1102,7 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleSwitchScope('splitBatch')}
-                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
                   scopeMode === 'splitBatch'
                     ? 'bg-[#00B050] text-white'
                     : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
@@ -934,11 +1110,22 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
               >
                 كل سؤال مستقل
               </button>
+              <button
+                type="button"
+                onClick={() => handleSwitchScope('chunkBatch')}
+                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
+                  scopeMode === 'chunkBatch'
+                    ? 'bg-[#00B050] text-white'
+                    : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+                }`}
+              >
+                مجموعات أسبوعية
+              </button>
             </div>
           )}
 
-          {/* Idle controls for single slide or split batch mode */}
-          {(sessionState === 'idle' || sessionState === 'cancelled') && scopeMode === 'single' && (
+          {/* Idle controls for single slide, split batch, or weekly pack mode */}
+          {!isStoryStudio && (sessionState === 'idle' || sessionState === 'cancelled') && scopeMode === 'single' && (
             <div className="flex flex-col gap-3 p-3.5 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs font-bold text-[var(--ptxt)]">
@@ -966,7 +1153,7 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
             </div>
           )}
 
-          {(sessionState === 'idle' || sessionState === 'cancelled') && scopeMode === 'splitBatch' && (
+          {!isStoryStudio && (sessionState === 'idle' || sessionState === 'cancelled') && scopeMode === 'splitBatch' && (
             <div className="flex flex-col gap-3 p-3.5 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
               <div className="flex items-start gap-2 text-xs text-[var(--ptxt)] leading-relaxed">
                 <Layers className="w-4 h-4 text-[#00B050] shrink-0 mt-0.5" />
@@ -981,6 +1168,46 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
                 className="w-full py-2.5 rounded-xl bg-[#00B050] hover:bg-[#00c85b] text-white text-xs font-bold cursor-pointer"
               >
                 تصدير وتنزيل كل الأسئلة ({project.slides.length} فيديو)
+              </button>
+            </div>
+          )}
+
+          {!isStoryStudio && (sessionState === 'idle' || sessionState === 'cancelled') && scopeMode === 'chunkBatch' && (
+            <div className="flex flex-col gap-3 p-3.5 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-[var(--ptxt)]">
+                  عدد الشرائح في كل فيديو:
+                </span>
+                <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--panel)] border border-[var(--pline)]">
+                  {([3, 5, 10] as const).map((sz) => (
+                    <button
+                      key={sz}
+                      type="button"
+                      onClick={() => setChunkSize(sz)}
+                      className={`px-3 py-1 rounded-md text-xs font-mono-nums font-bold cursor-pointer ${
+                        chunkSize === sz
+                          ? 'bg-[#00B050] text-white'
+                          : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+                      }`}
+                    >
+                      {sz}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-xs text-[var(--pmuted)] leading-relaxed">
+                سيتم تقسيم الـ {project.slides.length} شريحة تلقائياً إلى{' '}
+                <strong className="text-[var(--ptxt)]">
+                  {Math.ceil(project.slides.length / chunkSize)} فيديوهات متتالية
+                </strong>{' '}
+                وحفظها على الجهاز تباعاً (مناسبة للنشر اليومي أو الأسبوعي).
+              </p>
+              <button
+                type="button"
+                onClick={() => void startChunkBatchExport()}
+                className="w-full py-2.5 rounded-xl bg-[#00B050] hover:bg-[#00c85b] text-white text-xs font-bold cursor-pointer"
+              >
+                تصدير وتنزيل {Math.ceil(project.slides.length / chunkSize)} فيديوهات مجمّعة
               </button>
             </div>
           )}

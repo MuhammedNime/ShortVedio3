@@ -1,6 +1,12 @@
 import { soundEngine } from '../audio/soundEngine';
 import { getAvoidQuestionsForCategory } from '../storage/questionBankVault';
-import { QUIZ_CATEGORIES, QuestionSlide, QuizCategory, SlideAudioClip } from '../types/quiz';
+import {
+  QUIZ_CATEGORIES,
+  QuestionSlide,
+  QuizCategory,
+  SlideAudioClip,
+  StoryScene,
+} from '../types/quiz';
 
 export type AiVoiceName = 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
 export type AiVoiceMode = 'questionOnly' | 'questionAndAnswer' | 'full';
@@ -750,7 +756,7 @@ async function generateQuizDirectlyInApk(
   topic: string,
   count: number,
   difficulty: string,
-  contentType: 'general' | 'math' | 'trueFalse' | 'clues' | 'versus',
+  contentType: 'general' | 'math' | 'trueFalse' | 'clues' | 'versus' | 'order' | 'fillBlank' | 'story',
   avoidQuestions: string[] = [],
   category: QuizCategory = 'general'
 ): Promise<QuestionSlide[]> {
@@ -769,10 +775,16 @@ async function generateQuizDirectlyInApk(
     const isTrueFalse = contentType === 'trueFalse';
     const isClues = contentType === 'clues';
     const isVersus = contentType === 'versus';
+    const isOrder = contentType === 'order';
+    const isFillBlank = contentType === 'fillBlank';
+    const isStory = contentType === 'story';
     const isMath =
       !isTrueFalse &&
       !isClues &&
       !isVersus &&
+      !isOrder &&
+      !isFillBlank &&
+      !isStory &&
       (contentType === 'math' ||
         category === 'math' ||
         /رياضيات|جبر|معادل|كسر|كسور|جذر|جذور|حساب|هندسة|مثلث|مشتق|تكامل/i.test(topic));
@@ -780,6 +792,9 @@ async function generateQuizDirectlyInApk(
       !isMath &&
       !isTrueFalse &&
       !isClues &&
+      !isOrder &&
+      !isFillBlank &&
+      !isStory &&
       (category === 'discussion' ||
         /نقاش|جدل|رأي|رأيك|رايك|لو خي|لو خيروك|تفاعل|تعليقات|تفضل|موقف|اجتماعي/i.test(topic));
 
@@ -810,8 +825,46 @@ async function generateQuizDirectlyInApk(
     const categoryDirective = `\nالمجال / التصنيف المطلوب الالتزام به بدقة: ${categoryMeta.label} (${categoryMeta.promptHint}).`;
     const diversityDirective = `${categoryDirective}\nزاوية التنويع المطلوبة لهذا الطلب (#${varietySeed}): ${angleHint}.${avoidBlock}`;
 
-    const promptText = isTrueFalse
-      ? `الموضوع أو الفكرة المطلوبة: "${topic}"
+    const promptText = isStory
+      ? `الفكرة أو الموضوع المطلوب تحويله إلى مشاهد فيديو قصصي / معلوماتي متحرك (بدون أسئلة مسابقات): "${topic}"
+عدد المشاهد المتسلسلة المطلوبة: ${requestCount}
+${diversityDirective}
+
+أنشئ سيناريو من ${requestCount} مشاهد متسلسلة وجذابة لفيديو شورتس قصصي / تعليمي / حقائق مدهشة باللغة العربية الفصحى السلسة.
+أرجع مصفوفة JSON فقط (JSON Array) بدون أي نص إضافي خارج JSON، بحيث يمثل كل عنصر مشهداً كاملاً ويحتوي على:
+- badgeText: عنوان المرحلة القصير (مثال: المشهد 1 · البداية، أو حقيقة مدهشة · 1)
+- question: جملة خطّافة رئيسية قصيرة ومشوقة للمشهد (Hook أو عنوان الفكرة، أقل من 14 كلمة)
+- options: مصفوفة من 3 نقاط سردية متسلسلة ومختصرة تشرح المشهد تدريجياً (كل نقطة أقل من 12 كلمة)
+- correctIndex: 0 دائماً
+- explanationText: خلاصة المشهد أو العبرة أو التشويق للمشهد التالي (أقل من 14 كلمة)`
+      : isOrder
+        ? `الموضوع أو الفكرة المطلوبة: "${topic}"
+عدد تحديات الترتيب المطلوبة: ${requestCount}
+مستوى الصعوبة: ${diffLabel}
+${diversityDirective}
+
+أنشئ ${requestCount} سؤالاً بنمط (رتّب العناصر الأربعة حسب التسلسل الصحيح) باللغة العربية الفصحى.
+أرجع مصفوفة JSON فقط (JSON Array) بدون أي نص إضافي خارج JSON، بحيث يحتوي كل عنصر على:
+- badgeText: عنوان قصير للشارة العلوية (مثال: رتّب التسلسل · تحدي 1)
+- question: سؤال واضح يطلب الترتيب الصحيح (أقل من 14 كلمة)
+- options: مصفوفة من 4 عناصر مرتّبة بالفعل بالترتيب الصحيح من #1 إلى #4
+- correctIndex: 0 دائماً
+- explanationText: توضيح سريع للترتيب الصحيح (أقل من 14 كلمة)`
+        : isFillBlank
+          ? `الموضوع أو الفكرة المطلوبة: "${topic}"
+عدد أسئلة أكمل الفراغ المطلوبة: ${requestCount}
+مستوى الصعوبة: ${diffLabel}
+${diversityDirective}
+
+أنشئ ${requestCount} سؤالاً بنمط (أكمل الفراغ) باللغة العربية الفصحى.
+أرجع مصفوفة JSON فقط (JSON Array) بدون أي نص إضافي خارج JSON، بحيث يحتوي كل عنصر على:
+- badgeText: عنوان قصير للشارة العلوية (مثال: أكمل الفراغ · سؤال 1)
+- question: جملة واضحة تحتوي على علامة الفراغ ____ مكان الكلمة المفقودة (أقل من 15 كلمة)
+- options: مصفوفة من 4 كلمات قصيرة بالضبط
+- correctIndex: رقم صحيح من 0 إلى 3 يمثل الكلمة الصحيحة التي تملأ الفراغ
+- explanationText: معلومة سريعة عن الإجابة (أقل من 12 كلمة)`
+          : isTrueFalse
+            ? `الموضوع أو الفكرة المطلوبة: "${topic}"
 عدد الأسئلة المطلوبة: ${requestCount}
 مستوى الصعوبة: ${diffLabel}
 ${diversityDirective}
@@ -823,8 +876,8 @@ ${diversityDirective}
 - options: مصفوفة تحتوي خيارين بالضبط هما ["صح", "خطأ"]
 - correctIndex: 0 إذا كانت العبارة صحيحة، أو 1 إذا كانت خاطئة (نوّع بين 0 و 1)
 - explanationText: تصحيح أو توضيح قصير جداً (أقل من 12 كلمة)`
-      : isClues
-        ? `الموضوع أو الفكرة المطلوبة: "${topic}"
+            : isClues
+              ? `الموضوع أو الفكرة المطلوبة: "${topic}"
 عدد الألغاز المطلوبة: ${requestCount}
 مستوى الصعوبة: ${diffLabel}
 ${diversityDirective}
@@ -840,8 +893,8 @@ ${diversityDirective}
   * العنصر [3]: الإجابة الصحيحة النهائية (كلمة أو كلمتان فقط، بدون شرح)
 - correctIndex: دائماً الرقم 3
 - explanationText: حقيقة سريعة ومدهشة عن الإجابة (أقل من 12 كلمة)`
-        : isVersus
-          ? `الموضوع أو الفكرة المطلوبة: "${topic}"
+              : isVersus
+                ? `الموضوع أو الفكرة المطلوبة: "${topic}"
 عدد المقارنات المطلوبة: ${requestCount}
 مستوى الصعوبة: ${diffLabel}
 ${discussionGuidelines}
@@ -852,9 +905,9 @@ ${diversityDirective}
 - badgeText: عنوان قصير للشارة العلوية (مثال: مقارنة VS · تحدي 1)
 - question: سؤال مقارنة قصير ومباشر (مثال: أيهما أكبر مساحة؟ أو أيهما أسرع؟ أو أيهما تفضل؟ - أقل من 12 كلمة)
 - options: مصفوفة تحتوي اسمَي الطرفين المتنافسين بالضبط (اسمان قصيران واضحان)
-- correctIndex: 0 إذا كان الطرف الأول هو الصحيح/الأكثر اختياراً، أو 1 إذا كان الطرف الثاني (نوّع بين 0 و 1)
+- correctIndex: 0 إذا كان الطرف الأول هو الصحيح/الأقوى/الأكثر اختياراً، أو 1 إذا كان الطرف الثاني (نوّع بين 0 و 1)
 - explanationText: معلومة رقمية أو سبب سريع للفوز أو دعوة للنقاش (أقل من 12 كلمة)`
-          : `الموضوع أو الفكرة المطلوبة: "${topic}"
+                : `الموضوع أو الفكرة المطلوبة: "${topic}"
 عدد الأسئلة المطلوبة: ${requestCount}
 مستوى الصعوبة: ${diffLabel}
 ${mathGuidelines}
@@ -869,8 +922,9 @@ ${diversityDirective}
 - correctIndex: رقم صحيح من 0 إلى 3 يمثل الإجابة الصحيحة
 - explanationText: توضيح قصير جداً للإجابة (أقل من 12 كلمة)`;
 
-    const quizSystemInstruction =
-      'أنت خبير في إعداد أسئلة المسابقات والنقاشات التفاعلية والتحديات والرياضيات لفيديوهات يوتيوب باللغة العربية. التزم بالدقة والابتكار وتجنب تكرار الأسئلة المستهلكة والاختصار الواضح.';
+    const quizSystemInstruction = isStory
+      ? 'أنت مخرج وكاتب سيناريو محترف لفيديوهات الشورتس القصصية والتعليمية العربية المتحركة. اكتب مشاهد متسلسلة وجذابة بصياغة بصرية مركزة ومختصرة.'
+      : 'أنت خبير في إعداد أسئلة المسابقات والنقاشات التفاعلية والتحديات والرياضيات لفيديوهات يوتيوب باللغة العربية. التزم بالدقة والابتكار وتجنب تكرار الأسئلة المستهلكة والاختصار الواضح.';
 
     type RawApkQuizItem = {
       badgeText?: string;
@@ -965,7 +1019,7 @@ ${diversityDirective}
       }
     }
 
-    const minOpts = isTrueFalse || isVersus ? 2 : 4;
+    const minOpts = isTrueFalse || isVersus || isStory ? 2 : 4;
     const validRaw = parsed.filter(
       (item) =>
         item &&
@@ -990,6 +1044,45 @@ ${diversityDirective}
     const normalized = [...uniqueCandidates, ...fallbackCandidates]
       .slice(0, safeCount)
       .map((item, idx) => {
+        if (isStory) {
+          const cleanedOpts = (item.options || []).map((o) => String(o).trim()).filter(Boolean);
+          const opts: [string, string, string, string] = [
+            cleanedOpts[0] || 'نقطة رئيسية في المشهد',
+            cleanedOpts[1] || '',
+            cleanedOpts[2] || '',
+            cleanedOpts[3] || '',
+          ];
+          return {
+            id: `ai-slide-${Date.now()}-${idx}`,
+            slideType: 'story' as const,
+            category,
+            badgeText: (item.badgeText ?? `المشهد ${idx + 1}`).trim(),
+            question: item.question!.trim(),
+            options: opts,
+            correctIndex: 0 as const,
+            explanationText: (item.explanationText ?? '').trim(),
+          };
+        }
+
+        if (isOrder) {
+          const opts = item.options!.slice(0, 4).map((o) => String(o).trim()) as [
+            string,
+            string,
+            string,
+            string,
+          ];
+          return {
+            id: `ai-slide-${Date.now()}-${idx}`,
+            slideType: 'order' as const,
+            category,
+            badgeText: (item.badgeText ?? `رتّب التسلسل · ${idx + 1}`).trim(),
+            question: item.question!.trim(),
+            options: opts,
+            correctIndex: 0 as const,
+            explanationText: (item.explanationText ?? '').trim(),
+          };
+        }
+
         if (isTrueFalse) {
           const rawIdx = Number(item.correctIndex);
           const cIdx = (rawIdx === 1 ? 1 : 0) as 0 | 1;
@@ -1057,7 +1150,7 @@ ${diversityDirective}
           | 3;
         return {
           id: `ai-slide-${Date.now()}-${idx}`,
-          slideType: 'multiple' as const,
+          slideType: isFillBlank ? ('fillBlank' as const) : ('multiple' as const),
           category,
           badgeText: (item.badgeText ?? `السؤال ${idx + 1}`).trim(),
           question: item.question!.trim(),
@@ -1335,7 +1428,15 @@ export async function generateAiQuizSlides(
   topic: string,
   count: number,
   difficulty: string,
-  contentType: 'general' | 'math' | 'trueFalse' | 'clues' | 'versus' = 'general',
+  contentType:
+    | 'general'
+    | 'math'
+    | 'trueFalse'
+    | 'clues'
+    | 'versus'
+    | 'order'
+    | 'fillBlank'
+    | 'story' = 'general',
   existingQuestions: string[] = [],
   category: QuizCategory = 'general'
 ): Promise<QuestionSlide[]> {
@@ -1533,18 +1634,28 @@ export async function generateSlideVoiceoverSafe(
     }
 
     if (mode === 'full') {
+      const isStorySlide = slide.slideType === 'story';
+      const storyCount = isStorySlide
+        ? Math.max(1, Math.min(4, slide.options.filter((o) => o.trim().length > 0).length || 3))
+        : 4;
       const optCount =
         slide.slideType === 'trueFalse' || slide.slideType === 'versus'
           ? 2
           : slide.slideType === 'clues'
             ? 3
-            : 4;
+            : isStorySlide
+              ? storyCount
+              : 4;
       const itemLabel =
         slide.slideType === 'clues'
           ? 'التلميح'
           : slide.slideType === 'versus'
             ? 'الطرف'
-            : 'الخيار';
+            : slide.slideType === 'story'
+              ? 'الفقرة'
+              : slide.slideType === 'order'
+                ? 'العنصر'
+                : 'الخيار';
       for (let i = 0; i < optCount; i++) {
         const optText = (slide.options[i] ?? '').trim();
         if (!optText) continue;
@@ -1560,18 +1671,44 @@ export async function generateSlideVoiceoverSafe(
     }
 
     if (mode === 'questionAndAnswer' || mode === 'full') {
-      const ansIdx = slide.slideType === 'clues' ? 3 : slide.correctIndex;
-      const correctOptText = (slide.options[ansIdx] ?? '').trim();
-      if (correctOptText) {
-        await pause(280);
-        onStep?.('جارٍ توليد صوت الإجابة الصحيحة...');
-        const ansText = `الإجابة الصحيحة هي: ${correctOptText}`;
-        voiceover.answer = await generateTtsClip(
-          ansText,
-          voiceName,
-          'ai-answer.wav',
-          consistentStyle
-        );
+      if (slide.slideType === 'story') {
+        const takeaway = (slide.explanationText ?? '').trim();
+        if (takeaway) {
+          await pause(280);
+          onStep?.('جارٍ توليد صوت خلاصة المشهد...');
+          voiceover.answer = await generateTtsClip(
+            takeaway,
+            voiceName,
+            'ai-answer.wav',
+            consistentStyle
+          );
+        }
+      } else if (slide.slideType === 'order') {
+        const ordered = slide.options.map((o) => o.trim()).filter(Boolean);
+        if (ordered.length > 0) {
+          await pause(280);
+          onStep?.('جارٍ توليد صوت الترتيب الصحيح...');
+          voiceover.answer = await generateTtsClip(
+            `الترتيب الصحيح هو: ${ordered.join('، ثم ')}`,
+            voiceName,
+            'ai-answer.wav',
+            consistentStyle
+          );
+        }
+      } else {
+        const ansIdx = slide.slideType === 'clues' ? 3 : slide.correctIndex;
+        const correctOptText = (slide.options[ansIdx] ?? '').trim();
+        if (correctOptText) {
+          await pause(280);
+          onStep?.('جارٍ توليد صوت الإجابة الصحيحة...');
+          const ansText = `الإجابة الصحيحة هي: ${correctOptText}`;
+          voiceover.answer = await generateTtsClip(
+            ansText,
+            voiceName,
+            'ai-answer.wav',
+            consistentStyle
+          );
+        }
       }
     }
 
@@ -1597,20 +1734,281 @@ export interface YoutubePublishKit {
   pinnedComment: string;
 }
 
+export interface GeneratedStoryPayload {
+  storyTitle: string;
+  endMoralTitle: string;
+  endMoralSubtitle: string;
+  scenes: StoryScene[];
+}
+
+export interface GenerateStoryRequest {
+  topic: string;
+  tone: string;
+  sceneCount: number;
+  characters: Array<{ id: string; name: string; roleTitle?: string }>;
+  locations: Array<{ id: string; label: string; subtitle?: string }>;
+}
+
+function normalizeStoryPayloadFromAi(
+  raw: Record<string, unknown>,
+  req: GenerateStoryRequest
+): GeneratedStoryPayload {
+  const charIds = req.characters.map((c) => c.id);
+  const locIds = req.locations.map((l) => l.id);
+  const validMotions = ['zoomIn', 'zoomOut', 'panLeft', 'panRight', 'breathing'] as const;
+  const validAtmospheres = ['none', 'goldenDust', 'starlight', 'lanternGlow', 'rain'] as const;
+  const validPositions = ['left', 'center', 'right'] as const;
+  const validExpressions = ['calm', 'happy', 'serious', 'surprised'] as const;
+  const validTransitions = ['fade', 'zoomFade', 'wipeGold'] as const;
+
+  const rawScenes = Array.isArray(raw.scenes) ? raw.scenes : [];
+  if (rawScenes.length === 0) {
+    throw new AiApiError('لم يتمكن الذكاء الاصطناعي من إنشاء مشاهد صالحة للقصة.', 502);
+  }
+  const stamp = Date.now();
+  const scenes: StoryScene[] = rawScenes.slice(0, 6).map((scRaw, sIdx) => {
+    const sc = (scRaw && typeof scRaw === 'object' ? scRaw : {}) as Record<string, unknown>;
+    const rawLoc = typeof sc.locationId === 'string' ? sc.locationId.trim() : '';
+    const locationId = locIds.includes(rawLoc) ? rawLoc : locIds[sIdx % locIds.length];
+
+    const rawCharIds = Array.isArray(sc.characterIds)
+      ? sc.characterIds
+          .map((id) => (typeof id === 'string' ? id.trim() : ''))
+          .filter((id) => charIds.includes(id))
+      : [];
+
+    const rawLines = Array.isArray(sc.lines) ? sc.lines : [];
+    const lines = rawLines
+      .map((lnRaw, lIdx) => {
+        const ln = (lnRaw && typeof lnRaw === 'object' ? lnRaw : {}) as Record<string, unknown>;
+        const text = typeof ln.text === 'string' ? ln.text.trim() : '';
+        if (!text) return null;
+        const spRaw = typeof ln.speakerId === 'string' ? ln.speakerId.trim() : '';
+        const speakerId = charIds.includes(spRaw)
+          ? spRaw
+          : rawCharIds[lIdx % Math.max(1, rawCharIds.length)] ?? charIds[0];
+        const posRaw = typeof ln.position === 'string' ? ln.position.trim() : '';
+        const position = (validPositions as readonly string[]).includes(posRaw)
+          ? (posRaw as 'left' | 'center' | 'right')
+          : validPositions[lIdx % 3];
+        const expRaw = typeof ln.expression === 'string' ? ln.expression.trim() : '';
+        const expression = (validExpressions as readonly string[]).includes(expRaw)
+          ? (expRaw as 'calm' | 'happy' | 'serious' | 'surprised')
+          : 'calm';
+        return {
+          id: `ai-line-${stamp}-${sIdx}-${lIdx}`,
+          speakerId,
+          position,
+          expression,
+          text,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    if (lines.length === 0) {
+      lines.push({
+        id: `ai-line-${stamp}-${sIdx}-0`,
+        speakerId: charIds[0],
+        position: 'center',
+        expression: 'calm',
+        text: req.topic.trim(),
+      });
+    }
+
+    const castSet = new Set(rawCharIds);
+    for (const ln of lines) {
+      if (castSet.size < 3) castSet.add(ln.speakerId);
+    }
+    const finalCast = Array.from(castSet).slice(0, 3);
+    const motRaw = typeof sc.cameraMotion === 'string' ? sc.cameraMotion.trim() : '';
+    const atmRaw = typeof sc.atmosphere === 'string' ? sc.atmosphere.trim() : '';
+
+    return {
+      id: `ai-scene-${stamp}-${sIdx}`,
+      title:
+        typeof sc.title === 'string' && sc.title.trim()
+          ? sc.title.trim()
+          : `المشهد ${sIdx + 1}`,
+      locationId,
+      cameraMotion: (validMotions as readonly string[]).includes(motRaw)
+        ? (motRaw as StoryScene['cameraMotion'])
+        : validMotions[sIdx % validMotions.length],
+      atmosphere: (validAtmospheres as readonly string[]).includes(atmRaw)
+        ? (atmRaw as StoryScene['atmosphere'])
+        : 'goldenDust',
+      sceneBannerText:
+        typeof sc.sceneBannerText === 'string' && sc.sceneBannerText.trim()
+          ? sc.sceneBannerText.trim()
+          : typeof sc.title === 'string' && sc.title.trim()
+            ? sc.title.trim()
+            : `المشهد ${sIdx + 1}`,
+      characterIds: finalCast.length > 0 ? finalCast : [charIds[0]],
+      transition: validTransitions[sIdx % validTransitions.length],
+      lines,
+    };
+  });
+
+  return {
+    storyTitle:
+      typeof raw.storyTitle === 'string' && raw.storyTitle.trim()
+        ? raw.storyTitle.trim()
+        : req.topic.trim().slice(0, 60),
+    endMoralTitle:
+      typeof raw.endMoralTitle === 'string' && raw.endMoralTitle.trim()
+        ? raw.endMoralTitle.trim()
+        : 'الأمانةُ والصدقُ يرفعانِ صاحبهما في الدنيا والآخرة',
+    endMoralSubtitle:
+      typeof raw.endMoralSubtitle === 'string' && raw.endMoralSubtitle.trim()
+        ? raw.endMoralSubtitle.trim()
+        : 'شاركنا رأيك في التعليقات واشترك لمزيد من القصص الهادفة',
+    scenes,
+  };
+}
+
+export async function generateStoryWithAi(
+  req: GenerateStoryRequest
+): Promise<GeneratedStoryPayload> {
+  const cleanTopic = req.topic.trim();
+  if (!cleanTopic) {
+    throw new AiApiError('يرجى كتابة موضوع القصة أو الحوار أولاً.', 400);
+  }
+  const safeCount = Math.max(2, Math.min(6, Math.round(Number(req.sceneCount) || 3)));
+
+  if (hasAnyEmbeddedTextAiKeys() && !BUILD_API_BASE) {
+    try {
+      const { GoogleGenAI, ThinkingLevel, Type } = await import('@google/genai');
+      const promptText = `الموضوع المطلوب تحويله إلى قصة مصورة متحركة متعددة الشخصيات: "${cleanTopic}"
+الأسلوب الدرامي المطلوب: ${req.tone || 'قصة إسلامية هادفة'}
+عدد المشاهد المطلوبة: ${safeCount} مشاهد
+
+الشخصيات المتاحة (استخدم فقط المعرّفات التالية في characterIds و speakerId):
+${req.characters.map((c) => `- id: "${c.id}" | الاسم: ${c.name} (${c.roleTitle || 'شخصية'})`).join('\n')}
+
+الأماكن المتاحة (استخدم فقط المعرّفات التالية في locationId):
+${req.locations.map((l) => `- id: "${l.id}" | المكان: ${l.label}${l.subtitle ? ` (${l.subtitle})` : ''}`).join('\n')}
+
+قواعد التأليف الإلزامية:
+1. ممنوع وضع أي أسئلة مسابقات أو خيارات؛ هذا فيديو سينمائي قصصي حواري بالكامل.
+2. قسّم القصة إلى ${safeCount} مشاهد مترابطة، وفي كل مشهد 2-3 أسطر حوار عربية فصحى مؤثرة ومختصرة.
+3. أرجع JSON Object يحتوي: storyTitle, endMoralTitle, endMoralSubtitle, scenes.`;
+
+      const storySysInst =
+        'أنت مخرج وكاتب سيناريو محترف لأفلام الشورتس القصصية الإسلامية والتربوية 3D. تكتب حوارات عربية مؤثرة ومركزة.';
+
+      let parsed: Record<string, unknown> | null = null;
+      let geminiErr: unknown = null;
+
+      if (EMBEDDED_CLIENT_GEMINI_KEYS.length > 0) {
+        try {
+          const response = await runApkGeminiWithRotation(async (apiKey) => {
+            const ai = new GoogleGenAI({ apiKey });
+            return ai.models.generateContent({
+              model: 'gemini-4-hydrogen',
+              contents: promptText,
+              config: {
+                temperature: 0.92,
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                systemInstruction: storySysInst,
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    storyTitle: { type: Type.STRING },
+                    endMoralTitle: { type: Type.STRING },
+                    endMoralSubtitle: { type: Type.STRING },
+                    scenes: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          title: { type: Type.STRING },
+                          locationId: { type: Type.STRING },
+                          cameraMotion: { type: Type.STRING },
+                          atmosphere: { type: Type.STRING },
+                          sceneBannerText: { type: Type.STRING },
+                          characterIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                          lines: {
+                            type: Type.ARRAY,
+                            items: {
+                              type: Type.OBJECT,
+                              properties: {
+                                speakerId: { type: Type.STRING },
+                                position: { type: Type.STRING },
+                                expression: { type: Type.STRING },
+                                text: { type: Type.STRING },
+                              },
+                              required: ['speakerId', 'position', 'expression', 'text'],
+                            },
+                          },
+                        },
+                        required: ['title', 'locationId', 'characterIds', 'lines'],
+                      },
+                    },
+                  },
+                  required: ['storyTitle', 'endMoralTitle', 'endMoralSubtitle', 'scenes'],
+                },
+              },
+            });
+          });
+          parsed = extractClientJsonPayload(response.text ?? '{}') as Record<string, unknown>;
+        } catch (err) {
+          geminiErr = err;
+        }
+      }
+
+      if (!parsed && (EMBEDDED_CLIENT_GROQ_KEYS.length > 0 || EMBEDDED_CLIENT_OPENROUTER_KEYS.length > 0)) {
+        parsed = (await runApkExternalJsonFallback(storySysInst, promptText)) as Record<
+          string,
+          unknown
+        >;
+      } else if (!parsed && geminiErr) {
+        throw geminiErr;
+      }
+
+      return normalizeStoryPayloadFromAi(parsed ?? {}, req);
+    } catch (err) {
+      if (err instanceof AiApiError) throw err;
+      throw formatGeminiClientError(err);
+    }
+  }
+
+  const res = await fetchAi('/api/ai/generate-story', {
+    topic: cleanTopic,
+    tone: req.tone,
+    sceneCount: safeCount,
+    characters: req.characters,
+    locations: req.locations,
+  });
+
+  const data = await parseJsonSafe<
+    Partial<GeneratedStoryPayload> & { error?: string; quotaExhausted?: boolean }
+  >(res);
+  if (!res.ok || !Array.isArray(data.scenes)) {
+    throw new AiApiError(
+      data.error || 'تعذر توليد سيناريو القصة من الخادم.',
+      res.status,
+      Boolean(data.quotaExhausted)
+    );
+  }
+  return normalizeStoryPayloadFromAi(data as Record<string, unknown>, req);
+}
+
 export async function generateYoutubePublishKit(
   slides: QuestionSlide[],
   aspectRatio: '9:16' | '16:9',
-  hookText?: string
+  hookText?: string,
+  mode: 'quiz' | 'story' = 'quiz'
 ): Promise<YoutubePublishKit> {
   const validSlides = slides.filter((s) => (s.question || '').trim().length > 0).slice(0, 15);
   if (validSlides.length === 0) {
-    throw new AiApiError('لا توجد أسئلة صالحة لتوليد بيانات النشر.', 400);
+    throw new AiApiError('لا توجد محتويات صالحة لتوليد بيانات النشر.', 400);
   }
 
   if (hasAnyEmbeddedTextAiKeys() && !BUILD_API_BASE) {
     try {
       const { GoogleGenAI, ThinkingLevel, Type } = await import('@google/genai');
       const isShorts = aspectRatio !== '16:9';
+      const isStoryKit = mode === 'story' || validSlides.every((s) => s.slideType === 'story');
       const summaryLines = validSlides
         .map((q, i) => {
           const opts = (q.options || []).filter(Boolean).join(' / ');
@@ -1618,7 +2016,18 @@ export async function generateYoutubePublishKit(
         })
         .join('\n');
 
-      const promptText = `لدينا فيديو مسابقة أسئلة باللغة العربية بصيغة ${isShorts ? 'YouTube Shorts (عمودي 9:16)' : 'YouTube أفقي (16:9)'}.
+      const promptText = isStoryKit
+        ? `لدينا فيديو قصة وحوار سينمائي 3D هادف باللغة العربية بصيغة ${isShorts ? 'YouTube Shorts (عمودي 9:16)' : 'YouTube أفقي (16:9)'}.
+${hookText?.trim() ? `عنوان القصة: ${hookText.trim()}\n` : ''}مشاهد وحوارات القصة:
+${summaryLines}
+
+المطلوب إنشاء حزمة نشر احترافية باللغة العربية تزيد نسبة النقر والتعليقات على يوتيوب، بصيغة JSON فقط تحتوي:
+- title: عنوان درامي مشوق (أقل من 65 حرفاً${isShorts ? '، مع إضافة #Shorts في نهايته' : ''})
+- description: وصف متكامل وجذاب يوضح قيمة القصة ويدعو للاشتراك، مع الهاشتاغات المناسبة في نهايته
+- hashtags: مصفوفة من 5 إلى 8 هاشتاغات تبدأ بـ #
+- tags: مصفوفة من 8 إلى 12 كلمة مفتاحية بدون علامة #
+- pinnedComment: تعليق تفاعلي يدعو المشاهد لمشاركة العبرة أو رأيه في القصة`
+        : `لدينا فيديو مسابقة أسئلة باللغة العربية بصيغة ${isShorts ? 'YouTube Shorts (عمودي 9:16)' : 'YouTube أفقي (16:9)'}.
 ${hookText?.trim() ? `عبارة البداية (Hook): ${hookText.trim()}\n` : ''}الأسئلة الموجودة في الفيديو:
 ${summaryLines}
 
@@ -1629,8 +2038,9 @@ ${summaryLines}
 - tags: مصفوفة من 8 إلى 12 كلمة مفتاحية قوية للبحث في يوتيوب بدون علامة #
 - pinnedComment: تعليق تفاعلي قصير وممتع جاهز للتثبيت تحت الفيديو يدفع المشاهدين لكتابة نتيجتهم في التعليقات`;
 
-      const kitSystemInstruction =
-        'أنت خبير سيو يوتيوب وصناعة محتوى شورتس المسابقات باللغة العربية. اكتب عناوين عالية النقر بدون حشو، وأوصافاً طبيعية، وتعليقات تفاعلية ذكية.';
+      const kitSystemInstruction = isStoryKit
+        ? 'أنت خبير سيو يوتيوب لقنوات القصص والحكايات الدينية والتربوية العربية.'
+        : 'أنت خبير سيو يوتيوب وصناعة محتوى شورتس المسابقات باللغة العربية. اكتب عناوين عالية النقر بدون حشو، وأوصافاً طبيعية، وتعليقات تفاعلية ذكية.';
 
       let parsed: Partial<YoutubePublishKit> | null = null;
       let geminiErr: unknown = null;
@@ -1693,11 +2103,21 @@ ${summaryLines}
         : [];
 
       return {
-        title: (parsed.title || 'اختبر ذكاءك في هذا التحدي! #Shorts').trim().slice(0, 100),
+        title: (
+          parsed.title ||
+          (isStoryKit ? 'قصة قصيرة مؤثرة ستغير نظرتك! #Shorts' : 'اختبر ذكاءك في هذا التحدي! #Shorts')
+        )
+          .trim()
+          .slice(0, 100),
         description: (parsed.description || '').trim(),
         hashtags,
         tags,
-        pinnedComment: (parsed.pinnedComment || 'كم إجابة صحيحة جبت؟ اكتب نتيجتك في التعليقات 👇').trim(),
+        pinnedComment: (
+          parsed.pinnedComment ||
+          (isStoryKit
+            ? 'ما أكثر مشهد أعجبك في هذه القصة؟ شاركنا رأيك في التعليقات 👇'
+            : 'كم إجابة صحيحة جبت؟ اكتب نتيجتك في التعليقات 👇')
+        ).trim(),
       };
     } catch (err) {
       if (err instanceof AiApiError) throw err;
@@ -1714,6 +2134,7 @@ ${summaryLines}
     })),
     aspectRatio,
     hookText,
+    mode: mode === 'story' || validSlides.every((s) => s.slideType === 'story') ? 'story' : 'quiz',
   });
 
   const data = await parseJsonSafe<Partial<YoutubePublishKit> & { error?: string; quotaExhausted?: boolean }>(res);

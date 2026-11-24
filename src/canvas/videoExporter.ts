@@ -10,11 +10,14 @@ import { soundEngine } from '../audio/soundEngine';
 import {
   AudioSettings,
   QuestionSlide,
+  QuizProject,
   TemplateSettings,
   TimingSettings,
   computeProjectTimeline,
+  computeStoryTimeline,
   getCanvasDimensions,
   getIntroHookDuration,
+  getStoryTotalDuration,
   getTotalDuration,
 } from '../types/quiz';
 import {
@@ -25,6 +28,7 @@ import {
   preloadTimerVideo,
   renderQuizFrame,
 } from './quizRenderer';
+import { preloadStoryAssets, renderStoryFrame } from './storyRenderer';
 import {
   DimensionsPlan,
   ExportQualityTier,
@@ -222,12 +226,25 @@ function buildScheduledAudioPlan(
     const tThink = base + sched.tThinkingStart;
     const tSus = base + sched.tSuspenseStart;
     const tReveal = base + sched.tRevealStart;
+    const isStory = slide?.slideType === 'story';
+    const storyCount = isStory
+      ? Math.max(
+          1,
+          Math.min(
+            4,
+            (slide?.options || []).filter((o) => typeof o === 'string' && o.trim().length > 0)
+              .length || 3
+          )
+        )
+      : 4;
     const optCount =
       slide?.slideType === 'trueFalse' || slide?.slideType === 'versus'
         ? 2
         : slide?.slideType === 'clues'
           ? 3
-          : 4;
+          : isStory
+            ? storyCount
+            : 4;
     const hasAnyOptVoice = Array.from({ length: optCount }).some((_, oi) =>
       Boolean(slide?.voiceover?.options?.[oi]?.dataUrl)
     );
@@ -295,41 +312,131 @@ function buildScheduledAudioPlan(
       }
     }
 
-    const totalTicks = Math.floor(timing.thinkingDuration);
-    for (let sec = 0; sec < totalTicks; sec++) {
-      const tickSecond = totalTicks - sec;
-      const tTick = tThink + sec;
-      events.push({
-        time: tTick,
-        maxDuration: Math.max(0.08, Math.min(0.88, tSus - tTick - 0.02)),
-        event: {
-          type: 'countdownTick',
-          slideIndex: sIdx,
-          tickSecond,
-          urgent: tickSecond <= urgentThreshold,
-        },
-      });
+    if (!isStory) {
+      const totalTicks = Math.floor(timing.thinkingDuration);
+      for (let sec = 0; sec < totalTicks; sec++) {
+        const tickSecond = totalTicks - sec;
+        const tTick = tThink + sec;
+        events.push({
+          time: tTick,
+          maxDuration: Math.max(0.08, Math.min(0.88, tSus - tTick - 0.02)),
+          event: {
+            type: 'countdownTick',
+            slideIndex: sIdx,
+            tickSecond,
+            urgent: tickSecond <= urgentThreshold,
+          },
+        });
+      }
+
+      const susDur = Math.max(0, timing.suspenseDuration ?? 0);
+      if (susDur > 0) {
+        events.push({
+          time: tSus,
+          maxDuration: Math.max(0.15, tReveal - tSus - 0.02),
+          event: { type: 'suspense', slideIndex: sIdx },
+        });
+      }
     }
 
-    const susDur = Math.max(0, timing.suspenseDuration ?? 0);
-    if (susDur > 0) {
+    if (!isStory || Boolean(slide?.voiceover?.answer?.dataUrl)) {
       events.push({
-        time: tSus,
-        maxDuration: Math.max(0.15, tReveal - tSus - 0.02),
-        event: { type: 'suspense', slideIndex: sIdx },
+        time: tReveal,
+        maxDuration: Math.max(0.25, nextSlideStart - tReveal - 0.03),
+        event: { type: 'correctReveal', slideIndex: sIdx },
       });
     }
-
-    events.push({
-      time: tReveal,
-      maxDuration: Math.max(0.25, nextSlideStart - tReveal - 0.03),
-      event: { type: 'correctReveal', slideIndex: sIdx },
-    });
     if (slide?.voiceover?.answer?.dataUrl && slide.voiceover.answer.duration > 0.2) {
       speechIntervals.push({
         start: tReveal,
         end: Math.min(nextSlideStart - 0.02, tReveal + slide.voiceover.answer.duration),
       });
+    }
+  }
+
+  events.sort((a, b) => a.time - b.time);
+  return { events, speechIntervals };
+}
+
+interface ScheduledStoryAudio {
+  time: number;
+  maxDuration?: number;
+  type: 'introHook' | 'sceneEnter' | 'dialogueLine';
+  sceneIndex: number;
+  lineIndex?: number;
+}
+
+function buildStoryScheduledAudioPlan(
+  project: QuizProject,
+  totalDuration: number
+): {
+  events: ScheduledStoryAudio[];
+  speechIntervals: Array<{ start: number; end: number }>;
+} {
+  const events: ScheduledStoryAudio[] = [];
+  const speechIntervals: Array<{ start: number; end: number }> = [];
+  const scenes = project.storyScenes ?? [];
+  const schedules = computeStoryTimeline(
+    scenes,
+    project.timing,
+    project.storySettings,
+    project.template
+  );
+  const introDur = getIntroHookDuration(project.template, project.timing);
+  if (introDur > 0 && scenes.length > 0) {
+    const firstStart = schedules[0]?.startTime ?? introDur;
+    const bound = Math.max(0.15, firstStart - 0.02);
+    events.push({
+      time: 0,
+      maxDuration: bound,
+      type: 'introHook',
+      sceneIndex: 0,
+    });
+    if (project.template.introHookAudio?.dataUrl && (project.template.introHookAudio.duration ?? 0) > 0.2) {
+      speechIntervals.push({
+        start: 0,
+        end: Math.min(bound, project.template.introHookAudio.duration),
+      });
+    }
+  }
+
+  for (let sIdx = 0; sIdx < schedules.length; sIdx++) {
+    const sched = schedules[sIdx];
+    const scene = scenes[sIdx];
+    const nextSceneStart =
+      sIdx < schedules.length - 1 ? schedules[sIdx + 1].startTime : totalDuration;
+
+    if (sIdx > 0) {
+      events.push({
+        time: sched.startTime,
+        maxDuration: 0.28,
+        type: 'sceneEnter',
+        sceneIndex: sIdx,
+      });
+    }
+
+    for (let lIdx = 0; lIdx < sched.lines.length; lIdx++) {
+      const ls = sched.lines[lIdx];
+      const line = scene?.lines?.[lIdx];
+      const nextLineStart =
+        lIdx < sched.lines.length - 1 ? sched.lines[lIdx + 1].startTime : nextSceneStart;
+      const maxDur = Math.max(0.2, nextLineStart - ls.startTime - 0.02);
+      if (line?.voiceClip?.dataUrl) {
+        events.push({
+          time: ls.startTime,
+          maxDuration: maxDur,
+          type: 'dialogueLine',
+          sceneIndex: sIdx,
+          lineIndex: lIdx,
+        });
+        const dur = line.voiceClip.duration > 0.1 ? line.voiceClip.duration : ls.duration;
+        if (dur > 0.2) {
+          speechIntervals.push({
+            start: ls.startTime,
+            end: ls.startTime + Math.min(dur, maxDur),
+          });
+        }
+      }
     }
   }
 
@@ -612,7 +719,8 @@ async function encodeWithWebCodecsPlan(
   sAudio: AudioSettings,
   onProgress: (p: ExportProgress) => void,
   signal: AbortSignal,
-  getPreviewCanvas?: () => HTMLCanvasElement | null
+  getPreviewCanvas?: () => HTMLCanvasElement | null,
+  renderFrameOverride?: (ctx: CanvasRenderingContext2D, frameTime: number) => void
 ): Promise<ExportResult> {
   if (signal.aborted) {
     throw new Error('تم إلغاء التصدير.');
@@ -884,7 +992,11 @@ async function encodeWithWebCodecsPlan(
 
       await waitForVideoBackpressure();
 
-      renderQuizFrame(renderCtx, frameTime, sSlides, sTemplate, timing, sAudio, false);
+      if (renderFrameOverride) {
+        renderFrameOverride(renderCtx, frameTime);
+      } else {
+        renderQuizFrame(renderCtx, frameTime, sSlides, sTemplate, timing, sAudio, false);
+      }
 
       if (needsDownscale) {
         outputCtx.drawImage(renderCanvas, 0, 0, dims.width, dims.height);
@@ -1056,18 +1168,54 @@ async function encodeWithWebCodecsPlan(
   }
 }
 
-export async function exportQuizVideo(
-  slides: QuestionSlide[],
-  template: TemplateSettings,
-  timing: TimingSettings,
-  audio: AudioSettings,
-  onProgress: (p: ExportProgress) => void,
-  signal: AbortSignal,
-  options?: ExportVideoOptions
+interface FallbackRecorderInput {
+  baseWidth: number;
+  baseHeight: number;
+  dimensionPlans: DimensionsPlan[];
+  formatPref: ExportFormatPreference;
+  qualityTier: ExportQualityTier;
+  includeAudio: boolean;
+  totalDuration: number;
+  sharedAudioCtx: AudioContext | null;
+  masterAudioBuffer: AudioBuffer | null;
+  sAudio: AudioSettings;
+  timing: TimingSettings;
+  sTemplate: TemplateSettings;
+  sSlides: QuestionSlide[];
+  storyProject?: QuizProject;
+  renderFrame: (ctx: CanvasRenderingContext2D, t: number) => void;
+  webCodecsFailureNote?: string;
+  initialErr?: unknown;
+  onProgress: (p: ExportProgress) => void;
+  signal: AbortSignal;
+  getPreviewCanvas?: () => HTMLCanvasElement | null;
+}
+
+async function runMediaRecorderFallbackPipeline(
+  input: FallbackRecorderInput
 ): Promise<ExportResult> {
-  if (slides.length === 0) {
-    throw new Error('لا توجد أسئلة صالحة للتصدير.');
-  }
+  const {
+    baseWidth,
+    baseHeight,
+    dimensionPlans,
+    formatPref,
+    qualityTier,
+    includeAudio,
+    totalDuration,
+    sharedAudioCtx,
+    masterAudioBuffer,
+    sAudio,
+    timing,
+    sTemplate,
+    sSlides,
+    storyProject,
+    renderFrame,
+    webCodecsFailureNote,
+    initialErr,
+    onProgress,
+    signal,
+    getPreviewCanvas,
+  } = input;
 
   const checkAborted = () => {
     if (signal.aborted) {
@@ -1075,216 +1223,25 @@ export async function exportQuizVideo(
     }
   };
 
-  checkAborted();
-  const { width: baseWidth, height: baseHeight } = getCanvasDimensions(template);
-  const formatPref: ExportFormatPreference = options?.formatPreference ?? 'auto';
-  const resPref: ExportResolutionPreference = options?.resolutionPreference ?? 'auto';
-  const qualityTier: ExportQualityTier = options?.qualityTier ?? 'balanced';
-  const includeAudio = options?.includeAudio !== false;
-  const getPreviewCanvas = options?.getPreviewCanvas;
-
-  onProgress({
-    progress: 0.01,
-    currentTime: 0,
-    totalDuration: getTotalDuration(slides, timing, audio, template) || 1,
-    statusText: 'جارٍ فحص قدرات الجهاز وتجهيز الخطوط والقالب...',
-    stage: 'preparing',
-    engineLabel: 'جاري الفحص...',
-  });
-
-  const [capabilities] = await Promise.all([
-    probeExportCapabilities(),
-    ensureQuizFontsLoaded(template.fontFamily),
-    preloadTemplateBackground(template, slides),
-    preloadTimerVideo(),
-  ]);
-  clearRendererCaches();
-  checkAborted();
-
-  // Reuse the app's single shared AudioContext (never close it on cleanup!)
-  let sharedAudioCtx: AudioContext | null = null;
-  try {
-    sharedAudioCtx = soundEngine.getContext();
-  } catch {
-    sharedAudioCtx = null;
-  }
-
-  if (sharedAudioCtx && sharedAudioCtx.state === 'suspended') {
-    await Promise.race([
-      sharedAudioCtx.resume().catch(() => undefined),
-      sleepMs(400),
-    ]);
-  }
-  checkAborted();
-
-  const syncTask = soundEngine.syncProjectAudioDurations(
-    slides,
-    audio,
-    template,
-    sharedAudioCtx ?? undefined
-  );
-  const synced = await Promise.race([
-    syncTask,
-    new Promise<{ slides: QuestionSlide[]; audio: AudioSettings; template: TemplateSettings }>(
-      (resolve) => {
-        window.setTimeout(() => resolve({ slides, audio, template }), 8000);
-      }
-    ),
-  ]);
-  checkAborted();
-
-  const sSlides = synced.slides;
-  const sAudio = synced.audio;
-  const sTemplate = synced.template;
-
-  const totalDuration = getTotalDuration(sSlides, timing, sAudio, sTemplate);
-  if (totalDuration <= 0) {
-    throw new Error('لا توجد أسئلة صالحة للتصدير.');
-  }
-
-  let masterAudioBuffer: AudioBuffer | null = null;
-  if (includeAudio) {
-    onProgress({
-      progress: 0.03,
-      currentTime: 0,
-      totalDuration,
-      statusText: 'جارٍ معالجة ودمج المسار الصوتي بدقة...',
-      stage: 'preparing',
-      engineLabel: 'تحضير الصوت',
-    });
-
-    try {
-      const rendered = await soundEngine.renderOfflineExportMix(
-        sSlides,
-        sTemplate,
-        timing,
-        sAudio,
-        48000
-      );
-      masterAudioBuffer = rendered?.buffer ?? null;
-    } catch {
-      masterAudioBuffer = null;
-    }
-    checkAborted();
-  }
-
-  const dimensionPlans = resolveExportDimensionPlans(
-    baseWidth,
-    baseHeight,
-    resPref,
-    qualityTier,
-    capabilities
-  );
-  let lastErr: unknown = null;
-  let webCodecsFailureNote: string | undefined;
-
-  // ============================================================================
-  // TIER 1: Offline WebCodecs Engine (MP4 / WebM)
-  // ============================================================================
-  const canTryWebCodecs =
-    capabilities.hasWebCodecsVideo &&
-    (!includeAudio || (masterAudioBuffer !== null && capabilities.hasWebCodecsAudio));
-
-  if (canTryWebCodecs) {
-    const containerOrder: Array<'mp4' | 'webm'> =
-      formatPref === 'webm'
-        ? ['webm', 'mp4']
-        : formatPref === 'mp4'
-          ? ['mp4', 'webm']
-          : capabilities.isApple || capabilities.supportsMp4WebCodecs
-            ? ['mp4', 'webm']
-            : ['webm', 'mp4'];
-
-    const primaryResLabel = dimensionPlans[0]?.label;
-    const primaryFormat = containerOrder[0];
-
-    for (let dIdx = 0; dIdx < dimensionPlans.length; dIdx++) {
-      const dims = dimensionPlans[dIdx];
-      checkAborted();
-      const plans = await probeWebCodecsPlans(
-        containerOrder,
-        dims,
-        masterAudioBuffer,
-        includeAudio
-      );
-
-      for (let i = 0; i < plans.length; i++) {
-        checkAborted();
-        const plan = plans[i];
-        const switchedFormat =
-          formatPref !== 'auto' && plan.container !== formatPref;
-        const switchedRes =
-          resPref !== 'auto' && dims.label !== resPref;
-        const isRetryPlan = i > 0 || dIdx > 0;
-
-        let fallbackReason: string | undefined;
-        if (switchedFormat && switchedRes) {
-          fallbackReason = `تم التحويل إلى ${plan.container.toUpperCase()} بدقة ${dims.label} لتوافق الجهاز.`;
-        } else if (switchedFormat) {
-          fallbackReason = `تم التحويل إلى صيغة ${plan.container.toUpperCase()} لعدم توفر ترميز ${formatPref.toUpperCase()} على الجهاز.`;
-        } else if (switchedRes) {
-          fallbackReason = `تم خفض الدقة إلى ${dims.label} لضمان استقرار الترميز على الجهاز.`;
-        } else if (isRetryPlan && plan.container !== primaryFormat) {
-          fallbackReason = `تم استخدام حاوية ${plan.container.toUpperCase()} البديلة لضمان التوافق.`;
-        } else if (isRetryPlan && dims.label !== primaryResLabel) {
-          fallbackReason = `تم استخدام دقة ${dims.label} البديلة بعد تعذر الدقة الأعلى.`;
-        }
-
-        try {
-          if (isRetryPlan) {
-            onProgress({
-              progress: 0.04,
-              currentTime: 0,
-              totalDuration,
-              statusText: `جارٍ المحاولة بدقة ${dims.label} (${plan.container.toUpperCase()})...`,
-              stage: 'preparing',
-              engineLabel: `WebCodecs · ${plan.container.toUpperCase()} (${dims.label})`,
-              fallbackNotice: fallbackReason,
-            });
-          }
-          return await encodeWithWebCodecsPlan(
-            plan,
-            baseWidth,
-            baseHeight,
-            dims,
-            qualityTier,
-            Boolean(fallbackReason),
-            fallbackReason,
-            totalDuration,
-            sSlides,
-            sTemplate,
-            timing,
-            sAudio,
-            onProgress,
-            signal,
-            getPreviewCanvas
-          );
-        } catch (err) {
-          if (signal.aborted) throw err;
-          lastErr = err;
-          webCodecsFailureNote = 'تعذر إكمال التصدير السريع، تم التحويل إلى المسجل الاحتياطي.';
-        }
-      }
-    }
-  } else if (!capabilities.hasWebCodecsVideo) {
-    webCodecsFailureNote = 'المتصفح لا يدعم WebCodecs، تم استخدام مسجل MediaRecorder الاحتياطي.';
-  } else if (includeAudio && masterAudioBuffer === null) {
-    webCodecsFailureNote = 'تم استخدام مسجل MediaRecorder الاحتياطي لمعالجة الصوت.';
-  }
-
-  // ============================================================================
-  // TIER 2: Hardened MediaRecorder Fallback
-  // ============================================================================
   if (typeof MediaRecorder === 'undefined') {
-    throw lastErr instanceof Error
-      ? lastErr
+    throw initialErr instanceof Error
+      ? initialErr
       : new Error('متصفحك الحالي لا يدعم تصدير الفيديو (WebCodecs أو MediaRecorder).');
   }
 
-  const fallbackPlan =
-    includeAudio && !masterAudioBuffer
+  let lastErr: unknown = initialErr ?? null;
+
+  const quizPlan =
+    !storyProject && includeAudio && !masterAudioBuffer
       ? buildScheduledAudioPlan(sSlides, timing, sAudio, sTemplate, totalDuration)
-      : { events: [], speechIntervals: [] };
+      : { events: [] as ScheduledTimelineAudio[], speechIntervals: [] as Array<{ start: number; end: number }> };
+
+  const storyPlan =
+    storyProject && includeAudio && !masterAudioBuffer
+      ? buildStoryScheduledAudioPlan(storyProject, totalDuration)
+      : { events: [] as ScheduledStoryAudio[], speechIntervals: [] as Array<{ start: number; end: number }> };
+
+  const speechIntervals = storyProject ? storyPlan.speechIntervals : quizPlan.speechIntervals;
 
   const mimeCandidates = getPreferredMediaRecorderMimeTypes(formatPref);
 
@@ -1309,7 +1266,6 @@ export async function exportQuizVideo(
 
     const engineLabel = `MediaRecorder · ${candidate.extension.toUpperCase()} (${dims.label})`;
     const audioIsLive = withAudioTrack ? await checkAudioClockRunning(sharedAudioCtx) : false;
-    // Never attach a dead suspended AudioContext stream to MediaRecorder — it stalls muxing!
     const attachAudio = Boolean(withAudioTrack && sharedAudioCtx && audioIsLive);
 
     const renderCanvas = document.createElement('canvas');
@@ -1433,7 +1389,6 @@ export async function exportQuizVideo(
       activeRecorder = new MediaRecorder(combinedStream, opts);
     } catch (primaryErr) {
       try {
-        // Retry constructor without explicit bitrates if the WebView rejects bitrate hints
         activeRecorder = candidate.mimeType
           ? new MediaRecorder(combinedStream, { mimeType: candidate.mimeType })
           : new MediaRecorder(combinedStream);
@@ -1603,7 +1558,7 @@ export async function exportQuizVideo(
       };
 
       const renderToCapture = (t: number) => {
-        renderQuizFrame(renderCtx, t, sSlides, sTemplate, timing, sAudio, false);
+        renderFrame(renderCtx, t);
         if (needsDownscale) {
           captureCtx.drawImage(renderCanvas, 0, 0, dims.width, dims.height);
         }
@@ -1622,11 +1577,76 @@ export async function exportQuizVideo(
 
       const scheduleFallbackAudioLookahead = (horizonTime: number) => {
         if (!attachAudio || !sharedAudioCtx || !audioDest || masterAudioBuffer) return;
+
+        if (storyProject) {
+          while (
+            nextAudioIdx < storyPlan.events.length &&
+            storyPlan.events[nextAudioIdx].time <= horizonTime
+          ) {
+            const item = storyPlan.events[nextAudioIdx];
+            nextAudioIdx += 1;
+            const when = Math.max(sharedAudioCtx.currentTime, audioStartTime + item.time);
+            if (item.type === 'introHook') {
+              const hookSfx = storyProject.template.introHookSfx ?? 'whoosh';
+              const hasHookVoice = Boolean(storyProject.template.introHookAudio?.dataUrl);
+              if (hookSfx && hookSfx !== 'none') {
+                soundEngine.playBuiltInSfx(
+                  hookSfx,
+                  hasHookVoice ? 0.4 : 0.65,
+                  sharedAudioCtx,
+                  audioDest,
+                  when,
+                  false,
+                  1.6,
+                  hasHookVoice ? Math.min(0.28, item.maxDuration ?? 0.28) : item.maxDuration
+                );
+              }
+              if (storyProject.template.introHookAudio?.dataUrl) {
+                void soundEngine.playClip(
+                  storyProject.template.introHookAudio,
+                  1,
+                  audioDest,
+                  sharedAudioCtx,
+                  when,
+                  'voice',
+                  item.maxDuration
+                );
+              }
+            } else if (item.type === 'sceneEnter') {
+              soundEngine.playBuiltInSfx(
+                'whoosh',
+                0.32,
+                sharedAudioCtx,
+                audioDest,
+                when,
+                false,
+                1.0,
+                0.28
+              );
+            } else if (item.type === 'dialogueLine') {
+              const scene = storyProject.storyScenes?.[item.sceneIndex];
+              const line = scene?.lines?.[item.lineIndex ?? 0];
+              if (line?.voiceClip?.dataUrl) {
+                void soundEngine.playClip(
+                  line.voiceClip,
+                  1,
+                  audioDest,
+                  sharedAudioCtx,
+                  when,
+                  'voice',
+                  item.maxDuration
+                );
+              }
+            }
+          }
+          return;
+        }
+
         while (
-          nextAudioIdx < fallbackPlan.events.length &&
-          fallbackPlan.events[nextAudioIdx].time <= horizonTime
+          nextAudioIdx < quizPlan.events.length &&
+          quizPlan.events[nextAudioIdx].time <= horizonTime
         ) {
-          const item = fallbackPlan.events[nextAudioIdx];
+          const item = quizPlan.events[nextAudioIdx];
           nextAudioIdx += 1;
           const when = Math.max(sharedAudioCtx.currentTime, audioStartTime + item.time);
           const ev = item.event;
@@ -1783,10 +1803,10 @@ export async function exportQuizVideo(
                   return;
                 }
                 bgSource = src;
-                if (timing.autoDuckMusic !== false && fallbackPlan.speechIntervals.length > 0) {
+                if (timing.autoDuckMusic !== false && speechIntervals.length > 0) {
                   soundEngine.scheduleBgDuckIntervals(
                     sharedAudioCtx,
-                    fallbackPlan.speechIntervals,
+                    speechIntervals,
                     audioStartTime,
                     timing.bgMusicDuckRatio ?? 0.22
                   );
@@ -2011,8 +2031,469 @@ export async function exportQuizVideo(
     : new Error('تعذر تصدير الفيديو على هذا المتصفح. جرّب دقة 720p أو صيغة WebM.');
 }
 
+export async function exportQuizVideo(
+  slides: QuestionSlide[],
+  template: TemplateSettings,
+  timing: TimingSettings,
+  audio: AudioSettings,
+  onProgress: (p: ExportProgress) => void,
+  signal: AbortSignal,
+  options?: ExportVideoOptions
+): Promise<ExportResult> {
+  if (slides.length === 0) {
+    throw new Error('لا توجد أسئلة صالحة للتصدير.');
+  }
+
+  const checkAborted = () => {
+    if (signal.aborted) {
+      throw new Error('تم إلغاء التصدير.');
+    }
+  };
+
+  checkAborted();
+  const { width: baseWidth, height: baseHeight } = getCanvasDimensions(template);
+  const formatPref: ExportFormatPreference = options?.formatPreference ?? 'auto';
+  const resPref: ExportResolutionPreference = options?.resolutionPreference ?? 'auto';
+  const qualityTier: ExportQualityTier = options?.qualityTier ?? 'balanced';
+  const includeAudio = options?.includeAudio !== false;
+  const getPreviewCanvas = options?.getPreviewCanvas;
+
+  onProgress({
+    progress: 0.01,
+    currentTime: 0,
+    totalDuration: getTotalDuration(slides, timing, audio, template) || 1,
+    statusText: 'جارٍ فحص قدرات الجهاز وتجهيز الخطوط والقالب...',
+    stage: 'preparing',
+    engineLabel: 'جاري الفحص...',
+  });
+
+  const [capabilities] = await Promise.all([
+    probeExportCapabilities(),
+    ensureQuizFontsLoaded(template.fontFamily),
+    preloadTemplateBackground(template, slides),
+    preloadTimerVideo(),
+  ]);
+  clearRendererCaches();
+  checkAborted();
+
+  let sharedAudioCtx: AudioContext | null = null;
+  try {
+    sharedAudioCtx = soundEngine.getContext();
+  } catch {
+    sharedAudioCtx = null;
+  }
+
+  if (sharedAudioCtx && sharedAudioCtx.state === 'suspended') {
+    await Promise.race([
+      sharedAudioCtx.resume().catch(() => undefined),
+      sleepMs(400),
+    ]);
+  }
+  checkAborted();
+
+  const syncTask = soundEngine.syncProjectAudioDurations(
+    slides,
+    audio,
+    template,
+    sharedAudioCtx ?? undefined
+  );
+  const synced = await Promise.race([
+    syncTask,
+    new Promise<{ slides: QuestionSlide[]; audio: AudioSettings; template: TemplateSettings }>(
+      (resolve) => {
+        window.setTimeout(() => resolve({ slides, audio, template }), 8000);
+      }
+    ),
+  ]);
+  checkAborted();
+
+  const sSlides = synced.slides;
+  const sAudio = synced.audio;
+  const sTemplate = synced.template;
+
+  const totalDuration = getTotalDuration(sSlides, timing, sAudio, sTemplate);
+  if (totalDuration <= 0) {
+    throw new Error('لا توجد أسئلة صالحة للتصدير.');
+  }
+
+  let masterAudioBuffer: AudioBuffer | null = null;
+  if (includeAudio) {
+    onProgress({
+      progress: 0.03,
+      currentTime: 0,
+      totalDuration,
+      statusText: 'جارٍ معالجة ودمج المسار الصوتي بدقة...',
+      stage: 'preparing',
+      engineLabel: 'تحضير الصوت',
+    });
+
+    try {
+      const rendered = await soundEngine.renderOfflineExportMix(
+        sSlides,
+        sTemplate,
+        timing,
+        sAudio,
+        48000
+      );
+      masterAudioBuffer = rendered?.buffer ?? null;
+    } catch {
+      masterAudioBuffer = null;
+    }
+    checkAborted();
+  }
+
+  const dimensionPlans = resolveExportDimensionPlans(
+    baseWidth,
+    baseHeight,
+    resPref,
+    qualityTier,
+    capabilities
+  );
+  let lastErr: unknown = null;
+  let webCodecsFailureNote: string | undefined;
+
+  const canTryWebCodecs =
+    capabilities.hasWebCodecsVideo &&
+    (!includeAudio || (masterAudioBuffer !== null && capabilities.hasWebCodecsAudio));
+
+  if (canTryWebCodecs) {
+    const containerOrder: Array<'mp4' | 'webm'> =
+      formatPref === 'webm'
+        ? ['webm', 'mp4']
+        : formatPref === 'mp4'
+          ? ['mp4', 'webm']
+          : capabilities.isApple || capabilities.supportsMp4WebCodecs
+            ? ['mp4', 'webm']
+            : ['webm', 'mp4'];
+
+    const primaryResLabel = dimensionPlans[0]?.label;
+    const primaryFormat = containerOrder[0];
+
+    for (let dIdx = 0; dIdx < dimensionPlans.length; dIdx++) {
+      const dims = dimensionPlans[dIdx];
+      checkAborted();
+      const plans = await probeWebCodecsPlans(
+        containerOrder,
+        dims,
+        masterAudioBuffer,
+        includeAudio
+      );
+
+      for (let i = 0; i < plans.length; i++) {
+        checkAborted();
+        const plan = plans[i];
+        const switchedFormat = formatPref !== 'auto' && plan.container !== formatPref;
+        const switchedRes = resPref !== 'auto' && dims.label !== resPref;
+        const isRetryPlan = i > 0 || dIdx > 0;
+
+        let fallbackReason: string | undefined;
+        if (switchedFormat && switchedRes) {
+          fallbackReason = `تم التحويل إلى ${plan.container.toUpperCase()} بدقة ${dims.label} لتوافق الجهاز.`;
+        } else if (switchedFormat) {
+          fallbackReason = `تم التحويل إلى صيغة ${plan.container.toUpperCase()} لعدم توفر ترميز ${formatPref.toUpperCase()} على الجهاز.`;
+        } else if (switchedRes) {
+          fallbackReason = `تم خفض الدقة إلى ${dims.label} لضمان استقرار الترميز على الجهاز.`;
+        } else if (isRetryPlan && plan.container !== primaryFormat) {
+          fallbackReason = `تم استخدام حاوية ${plan.container.toUpperCase()} البديلة لضمان التوافق.`;
+        } else if (isRetryPlan && dims.label !== primaryResLabel) {
+          fallbackReason = `تم استخدام دقة ${dims.label} البديلة بعد تعذر الدقة الأعلى.`;
+        }
+
+        try {
+          if (isRetryPlan) {
+            onProgress({
+              progress: 0.04,
+              currentTime: 0,
+              totalDuration,
+              statusText: `جارٍ المحاولة بدقة ${dims.label} (${plan.container.toUpperCase()})...`,
+              stage: 'preparing',
+              engineLabel: `WebCodecs · ${plan.container.toUpperCase()} (${dims.label})`,
+              fallbackNotice: fallbackReason,
+            });
+          }
+          return await encodeWithWebCodecsPlan(
+            plan,
+            baseWidth,
+            baseHeight,
+            dims,
+            qualityTier,
+            Boolean(fallbackReason),
+            fallbackReason,
+            totalDuration,
+            sSlides,
+            sTemplate,
+            timing,
+            sAudio,
+            onProgress,
+            signal,
+            getPreviewCanvas
+          );
+        } catch (err) {
+          if (signal.aborted) throw err;
+          lastErr = err;
+          webCodecsFailureNote = 'تعذر إكمال التصدير السريع، تم التحويل إلى المسجل الاحتياطي.';
+        }
+      }
+    }
+  } else if (!capabilities.hasWebCodecsVideo) {
+    webCodecsFailureNote = 'المتصفح لا يدعم WebCodecs، تم استخدام مسجل MediaRecorder الاحتياطي.';
+  } else if (includeAudio && masterAudioBuffer === null) {
+    webCodecsFailureNote = 'تم استخدام مسجل MediaRecorder الاحتياطي لمعالجة الصوت.';
+  }
+
+  return await runMediaRecorderFallbackPipeline({
+    baseWidth,
+    baseHeight,
+    dimensionPlans,
+    formatPref,
+    qualityTier,
+    includeAudio,
+    totalDuration,
+    sharedAudioCtx,
+    masterAudioBuffer,
+    sAudio,
+    timing,
+    sTemplate,
+    sSlides,
+    renderFrame: (ctx, t) => renderQuizFrame(ctx, t, sSlides, sTemplate, timing, sAudio, false),
+    webCodecsFailureNote,
+    initialErr: lastErr,
+    onProgress,
+    signal,
+    getPreviewCanvas,
+  });
+}
+
+export async function exportStoryVideo(
+  project: QuizProject,
+  onProgress: (p: ExportProgress) => void,
+  signal: AbortSignal,
+  options?: ExportVideoOptions
+): Promise<ExportResult> {
+  const scenes = project.storyScenes ?? [];
+  if (scenes.length === 0) {
+    throw new Error('لا توجد مشاهد قصة صالحة للتصدير.');
+  }
+
+  const checkAborted = () => {
+    if (signal.aborted) {
+      throw new Error('تم إلغاء التصدير.');
+    }
+  };
+
+  checkAborted();
+  const baseTemplate = project.template;
+  const { width: baseWidth, height: baseHeight } = getCanvasDimensions(baseTemplate);
+  const formatPref: ExportFormatPreference = options?.formatPreference ?? 'auto';
+  const resPref: ExportResolutionPreference = options?.resolutionPreference ?? 'auto';
+  const qualityTier: ExportQualityTier = options?.qualityTier ?? 'balanced';
+  const includeAudio = options?.includeAudio !== false;
+  const getPreviewCanvas = options?.getPreviewCanvas;
+
+  const estDuration =
+    getStoryTotalDuration(scenes, project.timing, project.storySettings, baseTemplate) || 1;
+
+  onProgress({
+    progress: 0.01,
+    currentTime: 0,
+    totalDuration: estDuration,
+    statusText: 'جارٍ تحميل شخصيات 3D وخلفيات المشاهد والخطوط...',
+    stage: 'preparing',
+    engineLabel: 'جاري الفحص...',
+  });
+
+  const [capabilities] = await Promise.all([
+    probeExportCapabilities(),
+    ensureQuizFontsLoaded(baseTemplate.fontFamily),
+    preloadStoryAssets(project),
+  ]);
+  checkAborted();
+
+  let sharedAudioCtx: AudioContext | null = null;
+  try {
+    sharedAudioCtx = soundEngine.getContext();
+  } catch {
+    sharedAudioCtx = null;
+  }
+
+  if (sharedAudioCtx && sharedAudioCtx.state === 'suspended') {
+    await Promise.race([
+      sharedAudioCtx.resume().catch(() => undefined),
+      sleepMs(400),
+    ]);
+  }
+  checkAborted();
+
+  const syncedProject = await Promise.race([
+    soundEngine.syncStoryAudioDurations(project, sharedAudioCtx ?? undefined),
+    new Promise<QuizProject>((resolve) => {
+      window.setTimeout(() => resolve(project), 8000);
+    }),
+  ]);
+  checkAborted();
+
+  const sScenes = syncedProject.storyScenes ?? [];
+  const totalDuration = getStoryTotalDuration(
+    sScenes,
+    syncedProject.timing,
+    syncedProject.storySettings,
+    syncedProject.template
+  );
+  if (totalDuration <= 0) {
+    throw new Error('لا توجد مشاهد قصة صالحة للتصدير.');
+  }
+
+  let masterAudioBuffer: AudioBuffer | null = null;
+  if (includeAudio) {
+    onProgress({
+      progress: 0.03,
+      currentTime: 0,
+      totalDuration,
+      statusText: 'جارٍ دمج أصوات الشخصيات والموسيقى التصويرية...',
+      stage: 'preparing',
+      engineLabel: 'تحضير الصوت',
+    });
+
+    try {
+      const rendered = await soundEngine.renderOfflineStoryExportMix(syncedProject, 48000);
+      masterAudioBuffer = rendered?.buffer ?? null;
+    } catch {
+      masterAudioBuffer = null;
+    }
+    checkAborted();
+  }
+
+  const dimensionPlans = resolveExportDimensionPlans(
+    baseWidth,
+    baseHeight,
+    resPref,
+    qualityTier,
+    capabilities
+  );
+  let lastErr: unknown = null;
+  let webCodecsFailureNote: string | undefined;
+
+  const canTryWebCodecs =
+    capabilities.hasWebCodecsVideo &&
+    (!includeAudio || (masterAudioBuffer !== null && capabilities.hasWebCodecsAudio));
+
+  const renderStoryAtTime = (ctx: CanvasRenderingContext2D, t: number) => {
+    renderStoryFrame(ctx, t, syncedProject, false);
+  };
+
+  if (canTryWebCodecs) {
+    const containerOrder: Array<'mp4' | 'webm'> =
+      formatPref === 'webm'
+        ? ['webm', 'mp4']
+        : formatPref === 'mp4'
+          ? ['mp4', 'webm']
+          : capabilities.isApple || capabilities.supportsMp4WebCodecs
+            ? ['mp4', 'webm']
+            : ['webm', 'mp4'];
+
+    const primaryResLabel = dimensionPlans[0]?.label;
+    const primaryFormat = containerOrder[0];
+
+    for (let dIdx = 0; dIdx < dimensionPlans.length; dIdx++) {
+      const dims = dimensionPlans[dIdx];
+      checkAborted();
+      const plans = await probeWebCodecsPlans(
+        containerOrder,
+        dims,
+        masterAudioBuffer,
+        includeAudio
+      );
+
+      for (let i = 0; i < plans.length; i++) {
+        checkAborted();
+        const plan = plans[i];
+        const switchedFormat = formatPref !== 'auto' && plan.container !== formatPref;
+        const switchedRes = resPref !== 'auto' && dims.label !== resPref;
+        const isRetryPlan = i > 0 || dIdx > 0;
+
+        let fallbackReason: string | undefined;
+        if (switchedFormat && switchedRes) {
+          fallbackReason = `تم التحويل إلى ${plan.container.toUpperCase()} بدقة ${dims.label} لتوافق الجهاز.`;
+        } else if (switchedFormat) {
+          fallbackReason = `تم التحويل إلى صيغة ${plan.container.toUpperCase()} لعدم توفر ترميز ${formatPref.toUpperCase()} على الجهاز.`;
+        } else if (switchedRes) {
+          fallbackReason = `تم خفض الدقة إلى ${dims.label} لضمان استقرار الترميز على الجهاز.`;
+        } else if (isRetryPlan && plan.container !== primaryFormat) {
+          fallbackReason = `تم استخدام حاوية ${plan.container.toUpperCase()} البديلة لضمان التوافق.`;
+        } else if (isRetryPlan && dims.label !== primaryResLabel) {
+          fallbackReason = `تم استخدام دقة ${dims.label} البديلة بعد تعذر الدقة الأعلى.`;
+        }
+
+        try {
+          if (isRetryPlan) {
+            onProgress({
+              progress: 0.04,
+              currentTime: 0,
+              totalDuration,
+              statusText: `جارٍ المحاولة بدقة ${dims.label} (${plan.container.toUpperCase()})...`,
+              stage: 'preparing',
+              engineLabel: `WebCodecs · ${plan.container.toUpperCase()} (${dims.label})`,
+              fallbackNotice: fallbackReason,
+            });
+          }
+          return await encodeWithWebCodecsPlan(
+            plan,
+            baseWidth,
+            baseHeight,
+            dims,
+            qualityTier,
+            Boolean(fallbackReason),
+            fallbackReason,
+            totalDuration,
+            syncedProject.slides,
+            syncedProject.template,
+            syncedProject.timing,
+            syncedProject.audio,
+            onProgress,
+            signal,
+            getPreviewCanvas,
+            renderStoryAtTime
+          );
+        } catch (err) {
+          if (signal.aborted) throw err;
+          lastErr = err;
+          webCodecsFailureNote = 'تعذر إكمال التصدير السريع، تم التحويل إلى المسجل الاحتياطي.';
+        }
+      }
+    }
+  } else if (!capabilities.hasWebCodecsVideo) {
+    webCodecsFailureNote = 'المتصفح لا يدعم WebCodecs، تم استخدام مسجل MediaRecorder الاحتياطي.';
+  } else if (includeAudio && masterAudioBuffer === null) {
+    webCodecsFailureNote = 'تم استخدام مسجل MediaRecorder الاحتياطي لمعالجة الصوت.';
+  }
+
+  return await runMediaRecorderFallbackPipeline({
+    baseWidth,
+    baseHeight,
+    dimensionPlans,
+    formatPref,
+    qualityTier,
+    includeAudio,
+    totalDuration,
+    sharedAudioCtx,
+    masterAudioBuffer,
+    sAudio: syncedProject.audio,
+    timing: syncedProject.timing,
+    sTemplate: syncedProject.template,
+    sSlides: syncedProject.slides,
+    storyProject: syncedProject,
+    renderFrame: renderStoryAtTime,
+    webCodecsFailureNote,
+    initialErr: lastErr,
+    onProgress,
+    signal,
+    getPreviewCanvas,
+  });
+}
+
 export const __exporterInternals = {
   buildScheduledAudioPlan,
+  buildStoryScheduledAudioPlan,
   resampleAudioBuffer,
   DEFAULT_EXPORT_FPS,
 };

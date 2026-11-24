@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Copy, Download, FileUp, FolderOpen, Plus, Star, Trash2, X } from 'lucide-react';
+import { Clapperboard, Copy, Download, FileUp, FolderOpen, Plus, Star, Trash2, X } from 'lucide-react';
 import { buildFullStudioBackup, restoreFullStudioBackup } from '../storage/backupVault';
 import { CustomTemplatePreset, getDefaultCustomPreset } from '../storage/customPresets';
 import {
   ProjectSummary,
+  createDefaultStoryProject,
   deleteProjectFromStore,
   listProjectsFromStore,
   loadProjectById,
@@ -62,6 +63,13 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
     }
     await saveProjectToStore(fresh);
     onSelectProject(fresh);
+    onClose();
+  };
+
+  const handleCreateStoryProject = async () => {
+    const freshStory = createDefaultStoryProject(`قصة وحوار 3D · ${projects.length + 1}`);
+    await saveProjectToStore(freshStory);
+    onSelectProject(freshStory);
     onClose();
   };
 
@@ -189,14 +197,22 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
           )}
 
           {/* Quick Actions */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => void handleCreateStoryProject()}
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold transition-colors cursor-pointer"
+            >
+              <Clapperboard className="w-4 h-4" />
+              <span>مشروع قصة 3D جديد</span>
+            </button>
             <button
               type="button"
               onClick={() => void handleCreateNew()}
               className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-[#00B050] hover:bg-[#00c85b] text-white text-xs font-bold transition-colors cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>مشروع جديد فارغ</span>
+              <span>مشروع مسابقة جديد</span>
             </button>
             <button
               type="button"
@@ -204,7 +220,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
               className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-[var(--surface)] hover:border-[var(--gold)] border border-[var(--pline)] text-xs font-bold transition-colors cursor-pointer"
             >
               <Copy className="w-3.5 h-3.5 text-[var(--gold)]" />
-              <span>نسخ القالب كمشروع جديد</span>
+              <span>نسخ المشروع الحالي</span>
             </button>
           </div>
 
@@ -237,7 +253,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                       )}
                     </div>
                     <div className="text-[10px] text-[var(--pmuted)] mt-0.5 font-mono-nums">
-                      {p.slideCount} أسئلة · {p.aspectRatio}
+                      {p.slideCount} مشاهد/شرائح · {p.aspectRatio}
                     </div>
                   </button>
 

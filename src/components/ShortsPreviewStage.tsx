@@ -33,14 +33,25 @@ import {
   renderQuizFrame,
 } from '../canvas/quizRenderer';
 import {
+  collectStorySoundEventsInInterval,
+  exportStoryThumbnailJpg,
+  getStoryTimeInfo,
+  preloadStoryAssets,
+  renderStoryFrame,
+} from '../canvas/storyRenderer';
+import {
   AudioSettings,
   QuestionSlide,
+  QuizProject,
   TemplateSettings,
   TimingSettings,
   computeProjectTimeline,
+  computeStoryTimeline,
   getCanvasDimensions,
   getIntroHookDuration,
   getSlidesContentDuration,
+  getStoryContentDuration,
+  getStoryTotalDuration,
   getTotalDuration,
 } from '../types/quiz';
 
@@ -50,6 +61,9 @@ interface ShortsPreviewStageProps {
   template: TemplateSettings;
   timing: TimingSettings;
   audio: AudioSettings;
+  storyProject?: QuizProject;
+  activeStorySceneIndex?: number;
+  onActiveStorySceneChange?: (idx: number) => void;
   isExporting?: boolean;
   mobileStageMode?: 'compact' | 'expanded' | 'collapsed';
   onChangeMobileStageMode?: (mode: 'compact' | 'expanded' | 'collapsed') => void;
@@ -75,6 +89,9 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
   template,
   timing,
   audio,
+  storyProject,
+  activeStorySceneIndex = 0,
+  onActiveStorySceneChange,
   isExporting = false,
   mobileStageMode = 'compact',
   onChangeMobileStageMode,
@@ -84,6 +101,9 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
   onActiveSlideChange,
   onUpdateTemplate,
 }) => {
+  const isStoryStudio = storyProject?.studioMode === 'storyStudio';
+  const storyScenes = storyProject?.storyScenes ?? [];
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rangeInputRef = useRef<HTMLInputElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
@@ -96,7 +116,14 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
 
   const { width: canvasW, height: canvasH } = getCanvasDimensions(template);
   const isWide = template.aspectRatio === '16:9';
-  const totalDuration = getTotalDuration(slides, timing, audio, template);
+  const totalDuration = isStoryStudio
+    ? getStoryTotalDuration(
+        storyScenes,
+        timing,
+        storyProject?.storySettings,
+        template
+      )
+    : getTotalDuration(slides, timing, audio, template);
 
   const timeRef = useRef(0);
   const totalDurationRef = useRef(totalDuration);
@@ -112,6 +139,8 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
   const templateRef = useRef(template);
   const timingRef = useRef(timing);
   const audioRef = useRef(audio);
+  const storyProjectRef = useRef(storyProject);
+  const isStoryStudioRef = useRef(isStoryStudio);
   const dragModeRef = useRef(dragMode);
   const activeDragTargetRef = useRef<DragTargetId | null>(activeDragTarget);
   const hitboxesRef = useRef<StageElementHitbox[]>([]);
@@ -126,9 +155,11 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
   templateRef.current = template;
   timingRef.current = timing;
   audioRef.current = audio;
+  storyProjectRef.current = storyProject;
+  isStoryStudioRef.current = isStoryStudio;
   totalDurationRef.current = totalDuration;
   isMutedRef.current = isMuted;
-  dragModeRef.current = dragMode;
+  dragModeRef.current = isStoryStudio ? false : dragMode;
   activeDragTargetRef.current = activeDragTarget;
 
   const drawPreviewFrame = (
@@ -137,8 +168,14 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     s = slidesRef.current,
     tpl = templateRef.current,
     tm = timingRef.current,
-    au = audioRef.current
+    au = audioRef.current,
+    stProj = storyProjectRef.current
   ) => {
+    if (stProj?.studioMode === 'storyStudio') {
+      renderStoryFrame(ctx, t, stProj, true);
+      hitboxesRef.current = [];
+      return;
+    }
     const nextHitboxes: StageElementHitbox[] = [];
     renderQuizFrame(
       ctx,
@@ -203,18 +240,45 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
   }, [template.fontFamily]);
 
   useEffect(() => {
+    if (isStoryStudio && storyProject) {
+      void preloadStoryAssets(storyProject).then(() => {
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext('2d', { alpha: false });
+        if (ctx) {
+          drawPreviewFrame(ctx, timeRef.current, slides, template, timing, audio, storyProject);
+        }
+      });
+      return;
+    }
     void Promise.all([preloadTemplateBackground(template, slides), preloadTimerVideo()]).then(() => {
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d', { alpha: false });
       if (ctx) {
-        drawPreviewFrame(ctx, timeRef.current, slides, template, timing, audio);
+        drawPreviewFrame(ctx, timeRef.current, slides, template, timing, audio, storyProject);
       }
     });
-  }, [template, slides, timing, audio, canvasW, canvasH, dragMode, activeDragTarget]);
+  }, [template, slides, timing, audio, storyProject, isStoryStudio, canvasW, canvasH, dragMode, activeDragTarget]);
 
   useEffect(() => {
     if (!hasInitializedTimeRef.current && !hasUserScrubbedRef.current && !isPlayingRef.current) {
       hasInitializedTimeRef.current = true;
+      if (isStoryStudio && storyScenes.length > 0) {
+        const schedules = computeStoryTimeline(
+          storyScenes,
+          timing,
+          storyProject?.storySettings,
+          template
+        );
+        const sched = schedules[activeStorySceneIndex] ?? schedules[0];
+        if (sched) {
+          const showcaseTime = Math.min(
+            totalDuration,
+            sched.startTime + Math.min(1.2, sched.duration * 0.35)
+          );
+          syncTimeUi(showcaseTime, totalDuration, true);
+        }
+        return;
+      }
       const schedules = computeProjectTimeline(slides, timing, audio, template);
       const sched = schedules[activeSlideIndex] ?? schedules[0];
       if (sched) {
@@ -225,7 +289,7 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
         syncTimeUi(showcaseTime, totalDuration, true);
       }
     }
-  }, [slides, timing, audio, template, activeSlideIndex, totalDuration]);
+  }, [slides, timing, audio, template, activeSlideIndex, activeStorySceneIndex, isStoryStudio, storyScenes, storyProject, totalDuration]);
 
   useEffect(() => {
     if (totalDuration > 0 && timeRef.current > totalDuration) {
@@ -234,12 +298,42 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d', { alpha: false });
     if (ctx) {
-      drawPreviewFrame(ctx, timeRef.current, slides, template, timing, audio);
+      drawPreviewFrame(ctx, timeRef.current, slides, template, timing, audio, storyProject);
     }
-  }, [slides, template, timing, audio, totalDuration, canvasW, canvasH, dragMode, activeDragTarget]);
+  }, [slides, template, timing, audio, storyProject, totalDuration, canvasW, canvasH, dragMode, activeDragTarget]);
 
   const prevSlideIdxRef = useRef(activeSlideIndex);
+  const prevStorySceneIdxRef = useRef(activeStorySceneIndex);
   useEffect(() => {
+    if (isStoryStudio) {
+      if (prevStorySceneIdxRef.current !== activeStorySceneIndex && !isPlayingRef.current) {
+        if (isScrubSlideSyncRef.current) {
+          isScrubSlideSyncRef.current = false;
+        } else {
+          isExternallySelectedSlideRef.current = true;
+          const schedules = computeStoryTimeline(
+            storyScenes,
+            timing,
+            storyProject?.storySettings,
+            template
+          );
+          const sched = schedules[activeStorySceneIndex];
+          const target = sched
+            ? sched.lines[0]?.startTime ?? sched.startTime + Math.min(0.8, sched.duration * 0.25)
+            : 0;
+          const clamped = Math.min(totalDuration, target);
+          syncTimeUi(clamped, totalDuration, true);
+          const canvas = canvasRef.current;
+          const ctx = canvas?.getContext('2d', { alpha: false });
+          if (ctx) {
+            drawPreviewFrame(ctx, clamped, slides, template, timing, audio, storyProject);
+          }
+        }
+      }
+      prevStorySceneIdxRef.current = activeStorySceneIndex;
+      return;
+    }
+
     if (prevSlideIdxRef.current !== activeSlideIndex && !isPlayingRef.current) {
       if (isScrubSlideSyncRef.current) {
         isScrubSlideSyncRef.current = false;
@@ -255,12 +349,12 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
         const canvas = canvasRef.current;
         const ctx = canvas?.getContext('2d', { alpha: false });
         if (ctx) {
-          drawPreviewFrame(ctx, clamped, slides, template, timing, audio);
+          drawPreviewFrame(ctx, clamped, slides, template, timing, audio, storyProject);
         }
       }
     }
     prevSlideIdxRef.current = activeSlideIndex;
-  }, [activeSlideIndex, timing, audio, totalDuration, slides, template]);
+  }, [activeSlideIndex, activeStorySceneIndex, isStoryStudio, storyScenes, storyProject, timing, audio, totalDuration, slides, template]);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -276,6 +370,183 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     const isStale = () => canceled || !isPlayingRef.current || playSessionRef.current !== sessionId;
 
     const startPlayback = async () => {
+      if (isStoryStudioRef.current && storyProjectRef.current) {
+        const activeProj = await soundEngine.syncStoryAudioDurations(storyProjectRef.current);
+        if (isStale()) return;
+
+        if (!isMutedRef.current) {
+          void soundEngine.startBgMusic(activeProj.audio.bgMusic).then((src) => {
+            if (isStale() && src) {
+              soundEngine.stopBgMusic();
+            }
+          });
+        }
+        if (isStale()) return;
+
+        let rafId = 0;
+        const startMediaTime = timeRef.current;
+        const startPerfMs = performance.now();
+        let lastUiSyncPerf = startPerfMs;
+        let isFirstTick = true;
+
+        const tickStory = (now: number) => {
+          if (isStale()) return;
+          const liveProj = storyProjectRef.current ?? activeProj;
+          const syncedScenes =
+            (liveProj.storyScenes?.length ?? 0) === (activeProj.storyScenes?.length ?? 0)
+              ? activeProj
+              : liveProj;
+
+          const rawPrevT = timeRef.current;
+          const useFirstMargin = isFirstTick || forceFirstTickRef.current;
+          const prevT = useFirstMargin ? rawPrevT - 0.001 : rawPrevT;
+          isFirstTick = false;
+          forceFirstTickRef.current = false;
+
+          let nextT = startMediaTime + Math.max(0, (now - startPerfMs) / 1000);
+          const maxDur = getStoryTotalDuration(
+            syncedScenes.storyScenes ?? [],
+            syncedScenes.timing,
+            syncedScenes.storySettings,
+            syncedScenes.template
+          );
+
+          if (nextT >= maxDur) {
+            nextT = maxDur;
+            syncTimeUi(nextT, maxDur, true);
+            const canvas = canvasRef.current;
+            const ctx = canvas?.getContext('2d', { alpha: false });
+            if (ctx) {
+              drawPreviewFrame(
+                ctx,
+                nextT,
+                slidesRef.current,
+                syncedScenes.template,
+                syncedScenes.timing,
+                syncedScenes.audio,
+                syncedScenes
+              );
+            }
+            setIsPlaying(false);
+            soundEngine.stopBgMusic();
+            soundEngine.stopAllSfxAndVoice();
+            return;
+          }
+
+          if (!isMutedRef.current) {
+            const events = collectStorySoundEventsInInterval(prevT, nextT, syncedScenes);
+            const duckIfNeeded = (durSec: number) => {
+              if (syncedScenes.timing.autoDuckMusic !== false && durSec > 0.25) {
+                soundEngine.duckBgMusic(
+                  undefined,
+                  durSec,
+                  syncedScenes.timing.bgMusicDuckRatio ?? 0.24
+                );
+              }
+            };
+            for (const ev of events) {
+              const maxEvDur = ev.maxDuration;
+              if (ev.type === 'introHook') {
+                const hookSfx = syncedScenes.template.introHookSfx ?? 'whoosh';
+                const hasHookVoice = Boolean(syncedScenes.template.introHookAudio?.dataUrl);
+                if (hookSfx && hookSfx !== 'none') {
+                  const ctx = soundEngine.getContext();
+                  soundEngine.playBuiltInSfx(
+                    hookSfx,
+                    hasHookVoice ? 0.4 : 0.65,
+                    ctx,
+                    ctx.destination,
+                    ctx.currentTime,
+                    false,
+                    1.6,
+                    hasHookVoice ? Math.min(0.28, maxEvDur ?? 0.28) : maxEvDur
+                  );
+                }
+                if (syncedScenes.template.introHookAudio?.dataUrl) {
+                  const dur = Math.min(
+                    maxEvDur ?? 99,
+                    syncedScenes.template.introHookAudio.duration || 1.2
+                  );
+                  duckIfNeeded(dur);
+                  void soundEngine.playClip(
+                    syncedScenes.template.introHookAudio,
+                    1,
+                    undefined,
+                    undefined,
+                    undefined,
+                    'voice',
+                    maxEvDur
+                  );
+                }
+              } else if (ev.type === 'sceneEnter' && ev.sceneIndex > 0) {
+                const ctx = soundEngine.getContext();
+                soundEngine.playBuiltInSfx(
+                  'whoosh',
+                  0.32,
+                  ctx,
+                  ctx.destination,
+                  ctx.currentTime,
+                  false,
+                  1.0,
+                  0.28
+                );
+              } else if (ev.type === 'dialogueLine') {
+                const sc = syncedScenes.storyScenes?.[ev.sceneIndex];
+                const ln = sc?.lines?.[ev.lineIndex ?? 0];
+                if (ln?.voiceClip?.dataUrl) {
+                  const dur = Math.min(maxEvDur ?? 99, ln.voiceClip.duration || 1.5);
+                  duckIfNeeded(dur);
+                  void soundEngine.playClip(
+                    ln.voiceClip,
+                    1,
+                    undefined,
+                    undefined,
+                    undefined,
+                    'voice',
+                    maxEvDur
+                  );
+                }
+              }
+            }
+          }
+
+          const shouldSyncReact = now - lastUiSyncPerf >= 250;
+          if (shouldSyncReact) {
+            lastUiSyncPerf = now;
+          }
+          syncTimeUi(nextT, maxDur, shouldSyncReact);
+
+          const stInfo = getStoryTimeInfo(nextT, syncedScenes);
+          if (
+            stInfo &&
+            onActiveStorySceneChange &&
+            stInfo.sceneIndex !== prevStorySceneIdxRef.current
+          ) {
+            prevStorySceneIdxRef.current = stInfo.sceneIndex;
+            onActiveStorySceneChange(stInfo.sceneIndex);
+          }
+
+          const canvas = canvasRef.current;
+          const ctx = canvas?.getContext('2d', { alpha: false });
+          if (ctx) {
+            drawPreviewFrame(
+              ctx,
+              nextT,
+              slidesRef.current,
+              syncedScenes.template,
+              syncedScenes.timing,
+              syncedScenes.audio,
+              syncedScenes
+            );
+          }
+
+          rafId = requestAnimationFrame(tickStory);
+        };
+
+        rafId = requestAnimationFrame(tickStory);
+        return () => cancelAnimationFrame(rafId);
+      }
+
       let activeSlides = slidesRef.current;
       let activeAudio = audioRef.current;
       let activeTemplate = templateRef.current;
@@ -316,7 +587,6 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
 
         const rawPrevT = timeRef.current;
         const useFirstMargin = isFirstTick || forceFirstTickRef.current;
-        // Ensure events sitting right at play/step start time fire synchronously with first frame
         const prevT = useFirstMargin ? rawPrevT - 0.001 : rawPrevT;
         isFirstTick = false;
         forceFirstTickRef.current = false;
@@ -504,7 +774,7 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
       soundEngine.stopBgMusic();
       soundEngine.stopAllSfxAndVoice();
     };
-  }, [isPlaying, onActiveSlideChange]);
+  }, [isPlaying, onActiveSlideChange, onActiveStorySceneChange]);
 
   const handleTogglePlay = () => {
     soundEngine.getContext();
@@ -516,16 +786,33 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     ) {
       hasUserScrubbedRef.current = true;
       isExternallySelectedSlideRef.current = false;
-      const schedules = computeProjectTimeline(slides, timing, audio, template);
-      const sched = schedules[activeSlideIndex];
-      const startAt =
-        timeRef.current >= totalDuration - 0.05
-          ? 0
-          : activeSlideIndex === 0 && template.showIntroHook
+      let startAt = 0;
+      if (timeRef.current >= totalDuration - 0.05) {
+        startAt = 0;
+      } else if (isStoryStudio) {
+        const schedules = computeStoryTimeline(
+          storyScenes,
+          timing,
+          storyProject?.storySettings,
+          template
+        );
+        const sched = schedules[activeStorySceneIndex];
+        startAt =
+          activeStorySceneIndex === 0 && template.showIntroHook
             ? 0
             : sched
               ? sched.startTime
               : 0;
+      } else {
+        const schedules = computeProjectTimeline(slides, timing, audio, template);
+        const sched = schedules[activeSlideIndex];
+        startAt =
+          activeSlideIndex === 0 && template.showIntroHook
+            ? 0
+            : sched
+              ? sched.startTime
+              : 0;
+      }
       timeRef.current = startAt;
       setCurrentTime(startAt);
       forceFirstTickRef.current = true;
@@ -541,7 +828,12 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     forceFirstTickRef.current = true;
     timeRef.current = 0;
     setCurrentTime(0);
-    if (onActiveSlideChange && activeSlideIndex !== 0) {
+    if (isStoryStudio) {
+      if (onActiveStorySceneChange && activeStorySceneIndex !== 0) {
+        isScrubSlideSyncRef.current = true;
+        onActiveStorySceneChange(0);
+      }
+    } else if (onActiveSlideChange && activeSlideIndex !== 0) {
       isScrubSlideSyncRef.current = true;
       onActiveSlideChange(0);
     }
@@ -551,9 +843,21 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
   const handlePlayCurrentSlide = () => {
     soundEngine.getContext();
     soundEngine.stopAllSfxAndVoice();
-    const schedules = computeProjectTimeline(slides, timing, audio, template);
-    const sched = schedules[activeSlideIndex] ?? schedules[0];
-    const target = sched ? sched.startTime : 0;
+    let target = 0;
+    if (isStoryStudio) {
+      const schedules = computeStoryTimeline(
+        storyScenes,
+        timing,
+        storyProject?.storySettings,
+        template
+      );
+      const sched = schedules[activeStorySceneIndex] ?? schedules[0];
+      target = sched ? sched.startTime : 0;
+    } else {
+      const schedules = computeProjectTimeline(slides, timing, audio, template);
+      const sched = schedules[activeSlideIndex] ?? schedules[0];
+      target = sched ? sched.startTime : 0;
+    }
     hasUserScrubbedRef.current = true;
     isExternallySelectedSlideRef.current = false;
     forceFirstTickRef.current = true;
@@ -563,6 +867,30 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
   };
 
   const handleStepSlide = (delta: number) => {
+    if (isStoryStudio) {
+      const nextIdx = Math.max(0, Math.min(storyScenes.length - 1, activeStorySceneIndex + delta));
+      const schedules = computeStoryTimeline(
+        storyScenes,
+        timing,
+        storyProject?.storySettings,
+        template
+      );
+      const sched = schedules[nextIdx];
+      if (sched && onActiveStorySceneChange) {
+        soundEngine.getContext();
+        soundEngine.stopAllSfxAndVoice();
+        hasUserScrubbedRef.current = true;
+        isExternallySelectedSlideRef.current = false;
+        isScrubSlideSyncRef.current = true;
+        forceFirstTickRef.current = true;
+        onActiveStorySceneChange(nextIdx);
+        timeRef.current = sched.startTime;
+        setCurrentTime(sched.startTime);
+        setIsPlaying(true);
+      }
+      return;
+    }
+
     const nextIdx = Math.max(0, Math.min(slides.length - 1, activeSlideIndex + delta));
     const schedules = computeProjectTimeline(slides, timing, audio, template);
     const sched = schedules[nextIdx];
@@ -586,15 +914,23 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     soundEngine.stopAllSfxAndVoice();
     setIsPlaying(false);
     syncTimeUi(val, totalDuration, true);
-    const info = getSlideTimeInfo(val, slides, timing, audio, template);
-    if (info && onActiveSlideChange && info.slideIndex !== activeSlideIndex) {
-      isScrubSlideSyncRef.current = true;
-      onActiveSlideChange(info.slideIndex);
+    if (isStoryStudio && storyProject) {
+      const stInfo = getStoryTimeInfo(val, storyProject);
+      if (stInfo && onActiveStorySceneChange && stInfo.sceneIndex !== activeStorySceneIndex) {
+        isScrubSlideSyncRef.current = true;
+        onActiveStorySceneChange(stInfo.sceneIndex);
+      }
+    } else {
+      const info = getSlideTimeInfo(val, slides, timing, audio, template);
+      if (info && onActiveSlideChange && info.slideIndex !== activeSlideIndex) {
+        isScrubSlideSyncRef.current = true;
+        onActiveSlideChange(info.slideIndex);
+      }
     }
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d', { alpha: false });
     if (ctx) {
-      drawPreviewFrame(ctx, val, slides, template, timing, audio);
+      drawPreviewFrame(ctx, val, slides, template, timing, audio, storyProject);
     }
   };
 
@@ -746,12 +1082,18 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     const sched = schedules[activeSlideIndex] ?? schedules[0];
     if (!sched) return;
     const activeType = slides[activeSlideIndex]?.slideType;
+    const activeStoryOpts =
+      activeType === 'story'
+        ? Math.max(1, (slides[activeSlideIndex]?.options || []).filter((o) => Boolean(o && o.trim())).length)
+        : 4;
     const lastOptIdx =
       activeType === 'trueFalse' || activeType === 'versus'
         ? 1
         : activeType === 'clues'
           ? 2
-          : 3;
+          : activeType === 'story'
+            ? activeStoryOpts - 1
+            : 3;
 
     let target = sched.startTime + sched.tQuestionStart + 0.36;
     if (phase === 'intro') {
@@ -784,22 +1126,61 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     if (isCapturingThumb) return;
     setIsCapturingThumb(true);
     try {
-      const blob = await exportThumbnailJpg(
-        slides,
-        template,
-        timing,
-        audio,
-        timeRef.current
-      );
+      const blob =
+        isStoryStudio && storyProject
+          ? await exportStoryThumbnailJpg(storyProject, timeRef.current)
+          : await exportThumbnailJpg(slides, template, timing, audio, timeRef.current);
       if (!blob) return;
-      const fileName = `quiz-thumbnail-${Date.now()}.jpg`;
+      const fileName = `${isStoryStudio ? 'story-thumbnail' : 'quiz-thumbnail'}-${Date.now()}.jpg`;
       await saveOrDownloadBlob(blob, fileName, 'image/jpeg');
     } finally {
       setIsCapturingThumb(false);
     }
   };
 
+  const jumpToStoryScene = (sceneIdx: number | 'intro' | 'end') => {
+    if (!storyProject) return;
+    hasUserScrubbedRef.current = true;
+    isExternallySelectedSlideRef.current = false;
+    soundEngine.stopAllSfxAndVoice();
+    setIsPlaying(false);
+
+    const schedules = computeStoryTimeline(
+      storyScenes,
+      timing,
+      storyProject.storySettings,
+      template
+    );
+    let target = 0;
+    if (sceneIdx === 'intro') {
+      target = Math.min(0.45, totalDuration);
+    } else if (sceneIdx === 'end') {
+      const contentEnd = getStoryContentDuration(
+        storyScenes,
+        timing,
+        storyProject.storySettings,
+        template
+      );
+      target = Math.min(totalDuration, contentEnd + 0.45);
+    } else {
+      const sched = schedules[sceneIdx] ?? schedules[0];
+      target = sched ? sched.lines[0]?.startTime ?? sched.startTime : 0;
+      if (onActiveStorySceneChange) {
+        isScrubSlideSyncRef.current = true;
+        onActiveStorySceneChange(sceneIdx);
+      }
+    }
+    const clamped = Math.min(totalDuration, target);
+    syncTimeUi(clamped, totalDuration, true);
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d', { alpha: false });
+    if (ctx) {
+      drawPreviewFrame(ctx, clamped, slides, template, timing, audio, storyProject);
+    }
+  };
+
   const activePhaseId: 'intro' | 'question' | 'opt1' | 'opt4' | 'timer' | 'suspense' | 'reveal' | 'end' | null = (() => {
+    if (isStoryStudio) return null;
     const introDur = getIntroHookDuration(template, timing);
     if (introDur > 0 && currentTime < introDur) return 'intro';
     const contentEnd = getSlidesContentDuration(slides, timing, audio, template);
@@ -815,55 +1196,104 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
     return 'reveal';
   })();
 
+  const activeStoryJumpId: string | null = (() => {
+    if (!isStoryStudio || !storyProject) return null;
+    const introDur = getIntroHookDuration(template, timing);
+    if (introDur > 0 && currentTime < introDur) return 'intro';
+    const contentEnd = getStoryContentDuration(
+      storyScenes,
+      timing,
+      storyProject.storySettings,
+      template
+    );
+    if (currentTime >= contentEnd) return 'end';
+    const info = getStoryTimeInfo(currentTime, storyProject);
+    return info ? `scene-${info.sceneIndex}` : 'scene-0';
+  })();
+
   const currentPhaseLabel = (() => {
+    if (isStoryStudio && storyProject) {
+      const introDur = getIntroHookDuration(template, timing);
+      if (introDur > 0 && currentTime < introDur) return 'افتتاحية القصة';
+      const contentEnd = getStoryContentDuration(
+        storyScenes,
+        timing,
+        storyProject.storySettings,
+        template
+      );
+      if (currentTime >= contentEnd) return 'العبرة الختامية';
+      const info = getStoryTimeInfo(currentTime, storyProject);
+      return info?.scene?.title || `المشهد ${(info?.sceneIndex ?? 0) + 1}`;
+    }
     if (activePhaseId === 'intro') return 'المقدمة';
     if (activePhaseId === 'end') return 'النهاية';
-    if (activePhaseId === 'question') return 'السؤال';
+    const st = slides[activeSlideIndex]?.slideType;
+    if (activePhaseId === 'question') return st === 'story' ? 'عنوان المشهد' : 'السؤال';
     if (activePhaseId === 'opt1' || activePhaseId === 'opt4') {
-      const st = slides[activeSlideIndex]?.slideType;
-      return st === 'clues' ? 'ظهور التلميحات' : st === 'versus' ? 'ظهور الطرفين' : 'ظهور الخيارات';
+      return st === 'clues'
+        ? 'ظهور التلميحات'
+        : st === 'versus'
+          ? 'ظهور الطرفين'
+          : st === 'story'
+            ? 'سرد النقاط'
+            : st === 'order'
+              ? 'عرض العناصر'
+              : 'ظهور الخيارات';
     }
     if (activePhaseId === 'timer') return 'العد التنازلي';
     if (activePhaseId === 'suspense') return 'التشويق';
-    if (activePhaseId === 'reveal') return 'كشف الجواب ✓';
+    if (activePhaseId === 'reveal') return st === 'story' ? 'خلاصة المشهد' : 'كشف الجواب ✓';
     return '';
   })();
 
   const activeSlideType = slides[activeSlideIndex]?.slideType;
+  const isStoryActive = activeSlideType === 'story';
   const phases: {
     id: 'intro' | 'question' | 'opt1' | 'opt4' | 'timer' | 'suspense' | 'reveal' | 'end';
     label: string;
-  }[] = [
-    ...(template.showIntroHook ? [{ id: 'intro' as const, label: 'المقدمة' }] : []),
-    { id: 'question', label: 'السؤال' },
-    {
-      id: 'opt1',
-      label:
-        activeSlideType === 'clues'
-          ? 'تلميح 1'
-          : activeSlideType === 'versus'
-            ? 'طرف 1'
-            : 'خيار 1',
-    },
-    {
-      id: 'opt4',
-      label:
-        activeSlideType === 'trueFalse'
-          ? 'الخياران'
-          : activeSlideType === 'versus'
-            ? 'الطرفان'
-            : activeSlideType === 'clues'
-              ? 'تلميح 3'
-              : 'كل الخيارات',
-    },
-    { id: 'timer', label: 'المؤقت' },
-    ...(timing.suspenseDuration > 0 ? [{ id: 'suspense' as const, label: 'التشويق' }] : []),
-    { id: 'reveal', label: 'الناتج' },
-    ...(template.showEndCard ? [{ id: 'end' as const, label: 'النهاية' }] : []),
-  ];
+  }[] = isStoryStudio
+    ? []
+    : [
+        ...(template.showIntroHook ? [{ id: 'intro' as const, label: 'المقدمة' }] : []),
+        { id: 'question', label: isStoryActive ? 'المشهد' : 'السؤال' },
+        {
+          id: 'opt1',
+          label:
+            activeSlideType === 'clues'
+              ? 'تلميح 1'
+              : activeSlideType === 'versus'
+                ? 'طرف 1'
+                : activeSlideType === 'story'
+                  ? 'نقطة 1'
+                  : activeSlideType === 'order'
+                    ? 'عنصر 1'
+                    : 'خيار 1',
+        },
+        {
+          id: 'opt4',
+          label:
+            activeSlideType === 'trueFalse'
+              ? 'الخياران'
+              : activeSlideType === 'versus'
+                ? 'الطرفان'
+                : activeSlideType === 'clues'
+                  ? 'تلميح 3'
+                  : activeSlideType === 'story'
+                    ? 'كل النقاط'
+                    : 'كل الخيارات',
+        },
+        ...(!isStoryActive ? [{ id: 'timer' as const, label: 'المؤقت' }] : []),
+        ...(!isStoryActive && timing.suspenseDuration > 0
+          ? [{ id: 'suspense' as const, label: 'التشويق' }]
+          : []),
+        { id: 'reveal', label: isStoryActive ? 'الخلاصة' : 'الناتج' },
+        ...(template.showEndCard ? [{ id: 'end' as const, label: 'النهاية' }] : []),
+      ];
 
   const isCollapsedMobile = mobileStageMode === 'collapsed';
   const isCompactMobile = mobileStageMode === 'compact';
+  const itemTotalCount = isStoryStudio ? storyScenes.length : slides.length;
+  const itemCurrentIndex = isStoryStudio ? activeStorySceneIndex : activeSlideIndex;
 
   return (
     <div
@@ -905,25 +1335,69 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
         } items-center lg:flex-wrap lg:justify-center gap-1 w-full max-w-2xl overflow-x-auto no-scrollbar`}
       >
         <span className="text-[11px] text-[var(--pmuted)] ml-1 whitespace-nowrap shrink-0">
-          الانتقال:
+          {isStoryStudio ? 'المشاهد:' : 'الانتقال:'}
         </span>
-        {phases.map((p) => {
-          const isActivePhase = activePhaseId === p.id;
-          return (
+
+        {isStoryStudio ? (
+          <>
+            {template.showIntroHook && (
+              <button
+                type="button"
+                onClick={() => jumpToStoryScene('intro')}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeStoryJumpId === 'intro'
+                    ? 'bg-[#00B050] text-white border-[#00B050]'
+                    : 'bg-[var(--panel)] hover:border-[var(--gold)] text-[var(--ptxt)] border-[var(--pline)]'
+                }`}
+              >
+                البداية
+              </button>
+            )}
+            {storyScenes.map((sc, idx) => (
+              <button
+                key={sc.id}
+                type="button"
+                onClick={() => jumpToStoryScene(idx)}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeStoryJumpId === `scene-${idx}`
+                    ? 'bg-[#00B050] text-white border-[#00B050]'
+                    : 'bg-[var(--panel)] hover:border-[var(--gold)] text-[var(--ptxt)] border-[var(--pline)]'
+                }`}
+              >
+                مشهد {idx + 1}
+              </button>
+            ))}
             <button
-              key={p.id}
               type="button"
-              onClick={() => jumpToPhase(p.id)}
-              className={`px-2 py-0.5 lg:px-2.5 lg:py-1 text-[11px] font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isActivePhase
+              onClick={() => jumpToStoryScene('end')}
+              className={`px-2.5 py-1 text-[11px] font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeStoryJumpId === 'end'
                   ? 'bg-[#00B050] text-white border-[#00B050]'
                   : 'bg-[var(--panel)] hover:border-[var(--gold)] text-[var(--ptxt)] border-[var(--pline)]'
               }`}
             >
-              {p.label}
+              العبرة الختامية
             </button>
-          );
-        })}
+          </>
+        ) : (
+          phases.map((p) => {
+            const isActivePhase = activePhaseId === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => jumpToPhase(p.id)}
+                className={`px-2 py-0.5 lg:px-2.5 lg:py-1 text-[11px] font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  isActivePhase
+                    ? 'bg-[#00B050] text-white border-[#00B050]'
+                    : 'bg-[var(--panel)] hover:border-[var(--gold)] text-[var(--ptxt)] border-[var(--pline)]'
+                }`}
+              >
+                {p.label}
+              </button>
+            );
+          })
+        )}
       </div>
 
       {/* Pure Unobstructed Stage Frame: 9:16 Vertical Shorts OR 16:9 Landscape Video */}
@@ -934,7 +1408,7 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
       >
         <div
           className={`relative rounded-2xl overflow-hidden bg-black border-2 transition-all duration-200 shadow-2xl shadow-black/70 ${
-            dragMode ? 'border-[#00B050]' : 'border-[var(--pline)]'
+            !isStoryStudio && dragMode ? 'border-[#00B050]' : 'border-[var(--pline)]'
           } ${
             isWide
               ? 'w-full max-w-[780px] max-h-full aspect-video'
@@ -946,18 +1420,18 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
             width={canvasW}
             height={canvasH}
             onClick={() => {
-              if (!dragMode) handleTogglePlay();
+              if (isStoryStudio || !dragMode) handleTogglePlay();
             }}
-            onPointerDown={handleCanvasPointerDown}
-            onPointerMove={handleCanvasPointerMove}
-            onPointerUp={handleCanvasPointerUp}
-            onPointerCancel={handleCanvasPointerUp}
+            onPointerDown={isStoryStudio ? undefined : handleCanvasPointerDown}
+            onPointerMove={isStoryStudio ? undefined : handleCanvasPointerMove}
+            onPointerUp={isStoryStudio ? undefined : handleCanvasPointerUp}
+            onPointerCancel={isStoryStudio ? undefined : handleCanvasPointerUp}
             className={`w-full h-full object-contain block touch-none ${
-              dragMode ? 'cursor-move' : 'cursor-pointer'
+              !isStoryStudio && dragMode ? 'cursor-move' : 'cursor-pointer'
             }`}
           />
 
-          {dragMode && (
+          {!isStoryStudio && dragMode && (
             <div className="pointer-events-none absolute bottom-2.5 inset-x-2 flex justify-center">
               <span className="px-3 py-1 rounded-lg bg-[#00B050]/95 text-white text-[11px] font-bold shadow-lg">
                 اسحب السؤال أو الخيارات أو المؤقت أو الشارة أو الشعار مباشرة
@@ -1020,10 +1494,9 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
             {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
           </button>
 
-          {/* Mobile compact bar quick controls */}
           {onChangeMobileStageMode && (
             <div className="flex lg:hidden items-center gap-1 shrink-0">
-              {onUpdateTemplate && (
+              {!isStoryStudio && onUpdateTemplate && (
                 <button
                   type="button"
                   onClick={() => {
@@ -1071,32 +1544,32 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
           )}
         </div>
 
-        {/* Row 2: Slide Stepper + Quick Stage Tools */}
+        {/* Row 2: Stepper + Quick Stage Tools */}
         <div
           className={`${
             isCompactMobile ? 'hidden lg:flex' : 'flex'
           } flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--pline)]/60`}
         >
           <div className="flex items-center gap-1.5">
-            {slides.length > 1 && (
+            {itemTotalCount > 1 && (
               <div className="flex items-center rounded-lg bg-[var(--surface)] border border-[var(--pline)] overflow-hidden">
                 <button
                   type="button"
                   onClick={() => handleStepSlide(-1)}
-                  disabled={activeSlideIndex <= 0}
-                  title="السؤال السابق"
+                  disabled={itemCurrentIndex <= 0}
+                  title={isStoryStudio ? 'المشهد السابق' : 'السؤال السابق'}
                   className="h-8 px-2 text-[var(--ptxt)] hover:bg-[#00B050]/12 disabled:opacity-35 cursor-pointer"
                 >
                   <ChevronRight className="w-3.5 h-3.5" />
                 </button>
                 <span className="px-1.5 text-[11px] font-mono-nums font-bold text-[var(--pmuted)] whitespace-nowrap">
-                  {activeSlideIndex + 1}/{slides.length}
+                  {itemCurrentIndex + 1}/{itemTotalCount}
                 </span>
                 <button
                   type="button"
                   onClick={() => handleStepSlide(1)}
-                  disabled={activeSlideIndex >= slides.length - 1}
-                  title="السؤال التالي"
+                  disabled={itemCurrentIndex >= itemTotalCount - 1}
+                  title={isStoryStudio ? 'المشهد التالي' : 'السؤال التالي'}
                   className="h-8 px-2 text-[var(--ptxt)] hover:bg-[#00B050]/12 disabled:opacity-35 border-r border-[var(--pline)] cursor-pointer"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
@@ -1117,10 +1590,10 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
             <button
               type="button"
               onClick={handlePlayCurrentSlide}
-              title="تشغيل السؤال الحالي من بدايته"
+              title={isStoryStudio ? 'تشغيل المشهد الحالي من بدايته' : 'تشغيل السؤال الحالي من بدايته'}
               className="h-8 px-2.5 rounded-lg bg-[var(--surface)] hover:border-[#00B050] text-[var(--ptxt)] border border-[var(--pline)] text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              السؤال الحالي
+              {isStoryStudio ? 'المشهد الحالي' : 'السؤال الحالي'}
             </button>
 
             {currentPhaseLabel && (
@@ -1147,15 +1620,17 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={onCycleChannelTheme}
-              title="تبديل سريع لثيم القناة"
-              className="flex items-center gap-1 h-8 px-2.5 rounded-lg text-xs font-semibold bg-[var(--surface)] border border-[var(--pline)] text-[var(--sand)] hover:border-[var(--gold)] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Palette className="w-3.5 h-3.5" />
-              <span>الثيم</span>
-            </button>
+            {!isStoryStudio && (
+              <button
+                type="button"
+                onClick={onCycleChannelTheme}
+                title="تبديل سريع لثيم القناة"
+                className="flex items-center gap-1 h-8 px-2.5 rounded-lg text-xs font-semibold bg-[var(--surface)] border border-[var(--pline)] text-[var(--ptxt)] hover:border-[var(--gold)] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Palette className="w-3.5 h-3.5 text-[var(--gold)]" />
+                <span>الثيم</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -1168,7 +1643,7 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
               <span>{isCapturingThumb ? 'جارٍ الحفظ...' : 'غلاف JPG'}</span>
             </button>
 
-            {onUpdateTemplate && (
+            {!isStoryStudio && onUpdateTemplate && (
               <button
                 type="button"
                 onClick={() => {
@@ -1194,7 +1669,7 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
               title="إظهار حدود أزرار يوتيوب"
               className={`flex items-center gap-1 h-8 px-2.5 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 template.showSafeGuides
-                  ? 'bg-[#d4a73a]/20 border-[#d4a73a] text-[#EDD6A2]'
+                  ? 'bg-[var(--gold)]/15 border-[var(--gold)] text-[var(--ptxt)]'
                   : 'bg-[var(--surface)] border-[var(--pline)] text-[var(--pmuted)] hover:text-[var(--ptxt)]'
               }`}
             >

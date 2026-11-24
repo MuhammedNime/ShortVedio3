@@ -3,19 +3,44 @@
 
 @layer base {
   :root {
-    --page: #e9e4d8;
-    --panel: #fffaf0;
-    --surface: #f4ebd6;
-    --ptxt: #2a2113;
-    --pmuted: #6c5938;
-    --pline: #d9c9a3;
-    --sand: #edd6a2;
-    --gold: #b88924;
-    --ok: #00b050;
+    --page: #f1f5f9;
+    --panel: #ffffff;
+    --surface: #f8fafc;
+    --ptxt: #0f172a;
+    --pmuted: #475569;
+    --pline: #cbd5e1;
+    --sand: #92400e;
+    --gold: #d97706;
+    --ok: #059669;
     font-family: 'Cairo', 'Tajawal', system-ui, sans-serif;
   }
 
-  .dark {
+  .dark,
+  :root[data-studio-skin='obsidian'] {
+    --page: #090b10;
+    --panel: #11141c;
+    --surface: #181c27;
+    --ptxt: #f1f5f9;
+    --pmuted: #94a3b8;
+    --pline: #262c3d;
+    --sand: #f1d99a;
+    --gold: #f59e0b;
+    --ok: #10b981;
+  }
+
+  :root[data-studio-skin='midnight'] {
+    --page: #060a14;
+    --panel: #0d1526;
+    --surface: #131e36;
+    --ptxt: #f1f5f9;
+    --pmuted: #93a7c8;
+    --pline: #223254;
+    --sand: #bae6fd;
+    --gold: #38bdf8;
+    --ok: #10b981;
+  }
+
+  :root[data-studio-skin='warm'] {
     --page: #0c0c0c;
     --panel: #221c12;
     --surface: #17130c;
@@ -25,6 +50,18 @@
     --sand: #edd6a2;
     --gold: #d4a73a;
     --ok: #00b050;
+  }
+
+  :root[data-studio-skin='light'] {
+    --page: #f1f5f9;
+    --panel: #ffffff;
+    --surface: #f8fafc;
+    --ptxt: #0f172a;
+    --pmuted: #475569;
+    --pline: #cbd5e1;
+    --sand: #92400e;
+    --gold: #d97706;
+    --ok: #059669;
   }
 
   body {
@@ -53,15 +90,15 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(212, 167, 58, 0.25);
+  background: rgba(148, 163, 184, 0.28);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 167, 58, 0.45);
+  background: rgba(16, 185, 129, 0.5);
 }
 
-/* Range sliders accented in channel emerald green & comfortable on touch */
+/* Range sliders accented in emerald & comfortable on touch */
 input[type='range'] {
   accent-color: #00b050;
   cursor: pointer;
@@ -80,4 +117,3 @@ input[type='range'] {
 .ML__keyboard {
   z-index: 90 !important;
 }
-

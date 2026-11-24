@@ -69,6 +69,7 @@ interface AiGeneratorPanelProps {
   voiceName: AiVoiceName;
   existingQuestions?: string[];
   vaultRefreshTrigger?: number;
+  initialContentType?: 'general' | 'math' | 'trueFalse' | 'clues' | 'versus' | 'order' | 'fillBlank' | 'story';
   onOpenLargeVault?: () => void;
   onVoiceChange: (voice: AiVoiceName) => void;
   onInsertSlides: (
@@ -169,6 +170,27 @@ const VERSUS_SUGGESTIONS = [
   'دول ومدن ومباني تاريخية شهيرة',
 ];
 
+const ORDER_SUGGESTIONS = [
+  'مراحل تطور اختراع الهاتف والإنترنت',
+  'ترتيب الكواكب من الأقرب للشمس',
+  'مراحل نمو النبات أو دورة الماء في الطبيعة',
+  'ترتيب العصور والحضارات التاريخية زمنياً',
+];
+
+const FILL_BLANK_SUGGESTIONS = [
+  'أمثال وحكم عربية ينقصها كلمة مفتاحية',
+  'معلومات علمية وجغرافية بأسلوب أكمل الفراغ',
+  'إكمال معلومات تاريخية وإسلامية مشهورة',
+  'مفردات ومعاني عربية فصيحة في جمل قصيرة',
+];
+
+const STORY_SUGGESTIONS = [
+  'قصة صعود شركة أو اختراع غيّر العالم في 3 مشاهد',
+  '5 حقائق صادمة لا تعرفها عن الفضاء وأعماق البحار',
+  'كيف تحوّل عادتك اليومية في 3 خطوات عملية',
+  'قصة نجاح ملهمة أو سر تاريخي بأسلوب سردي سريع',
+];
+
 const RANDOM_DISCUSSION_AND_QUIZ_IDEAS = [
   'سؤال للنقاش عن الصداقة والثقة والمواقف اليومية',
   'سؤال للنقاش: لو خيّروك في قرار مصيري بالعمل أو المال',
@@ -184,6 +206,7 @@ export const AiGeneratorPanel: React.FC<AiGeneratorPanelProps> = ({
   voiceName,
   existingQuestions = [],
   vaultRefreshTrigger = 0,
+  initialContentType,
   onOpenLargeVault,
   onVoiceChange,
   onInsertSlides,
@@ -191,8 +214,15 @@ export const AiGeneratorPanel: React.FC<AiGeneratorPanelProps> = ({
   const [subTab, setSubTab] = useState<AiPanelSubTab>('direct');
   const [selectedCategory, setSelectedCategory] = useState<QuizCategory>('general');
   const [contentType, setContentType] = useState<
-    'general' | 'math' | 'trueFalse' | 'clues' | 'versus'
-  >('general');
+    'general' | 'math' | 'trueFalse' | 'clues' | 'versus' | 'order' | 'fillBlank' | 'story'
+  >(initialContentType ?? 'general');
+
+  useEffect(() => {
+    if (initialContentType) {
+      setContentType(initialContentType);
+      setSubTab('direct');
+    }
+  }, [initialContentType]);
   const [autoApplyMathTheme, setAutoApplyMathTheme] = useState(true);
   const [topic, setTopic] = useState('');
   const [count, setCount] = useState(2);
@@ -315,7 +345,13 @@ export const AiGeneratorPanel: React.FC<AiGeneratorPanelProps> = ({
           ? CLUES_SUGGESTIONS
           : contentType === 'versus'
             ? VERSUS_SUGGESTIONS
-            : CATEGORY_SUGGESTIONS[selectedCategory] ?? CATEGORY_SUGGESTIONS.general;
+            : contentType === 'order'
+              ? ORDER_SUGGESTIONS
+              : contentType === 'fillBlank'
+                ? FILL_BLANK_SUGGESTIONS
+                : contentType === 'story'
+                  ? STORY_SUGGESTIONS
+                  : CATEGORY_SUGGESTIONS[selectedCategory] ?? CATEGORY_SUGGESTIONS.general;
 
   const handleGenerate = async (insertMode: 'append' | 'replace') => {
     const trimmed = topic.trim() || selectedCategoryMeta.promptHint;
@@ -742,13 +778,16 @@ export const AiGeneratorPanel: React.FC<AiGeneratorPanelProps> = ({
 
       {/* Content Mode Switch */}
       <div className="flex flex-col gap-2">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 p-1 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
           {(
             [
               { id: 'general', label: 'ثقافة (4 خيارات)', icon: 'sparkles' },
               { id: 'trueFalse', label: 'صح أم خطأ ✓✗', icon: 'none' },
               { id: 'clues', label: '3 تلميحات 🔍', icon: 'none' },
               { id: 'versus', label: 'مقارنة VS ⚡', icon: 'none' },
+              { id: 'order', label: 'رتّب التسلسل 🔢', icon: 'none' },
+              { id: 'fillBlank', label: 'أكمل الفراغ ✏️', icon: 'none' },
+              { id: 'story', label: 'فيديو قصصي 🎬', icon: 'none' },
               { id: 'math', label: 'رياضيات 🧮', icon: 'calc' },
             ] as const
           ).map((modeBtn) => {
@@ -856,7 +895,7 @@ export const AiGeneratorPanel: React.FC<AiGeneratorPanelProps> = ({
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between text-xs text-[var(--ptxt)]">
-                <span>عدد الأسئلة</span>
+                <span>{contentType === 'story' ? 'عدد المشاهد' : 'عدد الأسئلة'}</span>
                 <span className="font-mono-nums text-[#00B050] font-bold">{count}</span>
               </div>
               <div className="flex items-center gap-1 p-1 rounded-lg bg-[var(--surface)] border border-[var(--pline)]">

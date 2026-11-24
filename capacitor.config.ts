@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.shortsquiz.studio0',
-  appName: 'استوديو شورتس الأسئلة',
+  appId: 'com.shortsquiz.studiopro',
+  appName: 'استوديو شورتس برو',
   webDir: 'dist',
   server: {
     androidScheme: 'https',

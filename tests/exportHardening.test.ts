@@ -13,7 +13,7 @@ import {
   exportSessionManager,
   formatDurationCompact,
 } from '../src/canvas/exportSession';
-import { __exporterInternals, exportQuizVideo } from '../src/canvas/videoExporter';
+import { __exporterInternals, exportQuizVideo, exportStoryVideo } from '../src/canvas/videoExporter';
 import {
   ensureMatchingFileName,
   normalizeExportMime,
@@ -21,11 +21,17 @@ import {
   shareBlobNatively,
 } from '../src/utils/nativeDownload';
 import { soundEngine } from '../src/audio/soundEngine';
+import { createDefaultStoryProject, normalizeLoadedProject } from '../src/storage/projectStore';
 import {
+  applyStudioThemePreset,
   AudioSettings,
+  computeProjectTimeline,
+  computeSlideSchedule,
+  computeStoryTimeline,
   DEFAULT_AUDIO,
   DEFAULT_TEMPLATE,
   DEFAULT_TIMING,
+  getProjectTotalDuration,
   QuestionSlide,
   TemplateSettings,
   TimingSettings,
@@ -796,6 +802,29 @@ function installMockEnvironment(metrics: MockMetrics, opts: EnvOptions = {}) {
   g.EncodedAudioChunk = MockEncodedAudioChunk;
   g.VideoEncoder = MockVideoEncoder;
   g.AudioEncoder = MockAudioEncoder;
+  class MockImage {
+    public crossOrigin = '';
+    public onload: (() => void) | null = null;
+    public onerror: (() => void) | null = null;
+    public complete = false;
+    public naturalWidth = 0;
+    public naturalHeight = 0;
+    private _src = '';
+    get src() {
+      return this._src;
+    }
+    set src(val: string) {
+      this._src = val;
+      globalThis.setTimeout(() => {
+        this.complete = true;
+        this.naturalWidth = 1024;
+        this.naturalHeight = 1024;
+        this.onload?.();
+      }, 0);
+    }
+  }
+
+  g.Image = MockImage;
   g.MediaStream = MockMediaStream;
   g.MediaRecorder = MockMediaRecorder;
 
@@ -1332,7 +1361,133 @@ async function runAllTests() {
     console.log('✓ Test Extra: WebCodecs 1080p -> 720p Graceful Resolution Fallback');
   }
 
-  console.log('\n✅ All Phase 1 Export Hardening automated scenarios passed!');
+  // --------------------------------------------------------------------------
+  // Test Phase 2: Interactive Modes (story, order, fillBlank) & New Presets
+  // --------------------------------------------------------------------------
+  {
+    const timing = buildTiming(5, 2.0, 0.4);
+    const storySlide: QuestionSlide = {
+      id: 'story-1',
+      slideType: 'story',
+      badgeText: 'مشهد 1',
+      question: 'حقائق مذهلة عن الفضاء',
+      options: ['الشمس أكبر من الأرض بمليون مرة', 'الفضاء صامت تماماً', 'اليوم على الزهرة أطول من سنته', ''],
+      correctIndex: 0,
+      explanationText: 'ملخص المشهد',
+    };
+    const storySched = computeSlideSchedule(storySlide, 0, 0, timing, DEFAULT_AUDIO, {
+      optionsAppearMode: 'allAtOnce',
+    });
+    assert.equal(storySched.tThinkingStart, storySched.tTimerExitStart, 'Story mode skips countdown timer');
+    assert.equal(storySched.tSuspenseStart, storySched.tRevealStart, 'Story mode skips suspense phase');
+    assert.ok(storySched.tOptionStarts[1] > storySched.tOptionStarts[0], 'Story points appear sequentially');
+    assert.ok(storySched.tOptionStarts[2] > storySched.tOptionStarts[1], 'Third story point advances sequentially');
+    assert.equal(storySched.tOptionStarts[3], storySched.tOptionStarts[2], 'Empty 4th option reuses last start');
+
+    const orderSlide: QuestionSlide = {
+      id: 'order-1',
+      slideType: 'order',
+      badgeText: 'رتّب',
+      question: 'رتب الكواكب من الأقرب للشمس',
+      options: ['عطارد', 'الزهرة', 'الأرض', 'المريخ'],
+      correctIndex: 0,
+    };
+    const fillBlankSlide: QuestionSlide = {
+      id: 'fill-1',
+      slideType: 'fillBlank',
+      badgeText: 'أكمل الفراغ',
+      question: 'عاصمة اليابان هي ___ وتشتهر بالتكنولوجيا',
+      options: ['أوساكا', 'طوكيو', 'كيوتو', 'ناغويا'],
+      correctIndex: 1,
+    };
+    const timeline = computeProjectTimeline([storySlide, orderSlide, fillBlankSlide], timing, DEFAULT_AUDIO, {
+      ...DEFAULT_TEMPLATE,
+      showIntroHook: false,
+    });
+    assert.equal(timeline.length, 3);
+    assert.ok(timeline[1].tTimerExitStart - timeline[1].tThinkingStart >= 5, 'Order slide keeps countdown');
+    assert.ok(timeline[2].tRevealStart - timeline[2].tSuspenseStart >= 0.75, 'FillBlank slide keeps suspense');
+
+    assert.equal(DEFAULT_TEMPLATE.animatedMotionBg, 'none');
+    assert.equal(DEFAULT_TEMPLATE.showAutoCaptions, false);
+    assert.equal(DEFAULT_TEMPLATE.ctaOverlayText, '');
+
+    const gaming = applyStudioThemePreset(DEFAULT_TEMPLATE, 'gamingRgb');
+    assert.equal(gaming.presetId, 'gamingRgb');
+    assert.equal(gaming.animatedMotionBg, 'neonGrid');
+    assert.equal(gaming.boxStyle, 'neon');
+
+    const cinema = applyStudioThemePreset(DEFAULT_TEMPLATE, 'cinemaGold');
+    assert.equal(cinema.presetId, 'cinemaGold');
+    assert.equal(cinema.animatedMotionBg, 'starfieldWarp');
+    assert.equal(cinema.boxStyle, 'bevel3d');
+
+    const podcast = applyStudioThemePreset(DEFAULT_TEMPLATE, 'podcastModern');
+    assert.equal(podcast.presetId, 'podcastModern');
+    assert.equal(podcast.animatedMotionBg, 'auroraWave');
+    assert.equal(podcast.boxStyle, 'glass');
+
+    const sport = applyStudioThemePreset(DEFAULT_TEMPLATE, 'sportPulse');
+    assert.equal(sport.presetId, 'sportPulse');
+    assert.equal(sport.animatedMotionBg, 'stadiumLights');
+    assert.equal(sport.boxStyle, 'bevel3d');
+
+    console.log('✓ Test Phase 2: story/order/fillBlank Schedules & New Studio Presets');
+  }
+
+  // --------------------------------------------------------------------------
+  // Test Phase 3: Dedicated 3D Storytelling & Dialogue Cinema Export + Store
+  // --------------------------------------------------------------------------
+  {
+    const m = createFreshMetrics();
+    installMockEnvironment(m);
+    const storyProj = createDefaultStoryProject('قصة ميزان الأمانة 3D');
+    assert.equal(storyProj.studioMode, 'storyStudio');
+    assert.ok((storyProj.storyScenes?.length ?? 0) >= 3);
+    assert.ok((storyProj.storyCharacters?.length ?? 0) >= 5);
+
+    const normalized = normalizeLoadedProject(storyProj);
+    assert.equal(normalized.studioMode, 'storyStudio');
+    assert.equal(normalized.storyTitle, 'قصة ميزان الأمانة 3D');
+
+    const storySchedules = computeStoryTimeline(
+      normalized.storyScenes!,
+      normalized.timing,
+      normalized.storySettings,
+      normalized.template
+    );
+    assert.equal(storySchedules.length, normalized.storyScenes!.length);
+    const totalDur = getProjectTotalDuration(normalized);
+    assert.ok(totalDur > 10, `Story duration should exceed 10s, got ${totalDur}`);
+
+    const ac = new AbortController();
+    const res = await exportStoryVideo(normalized, () => {}, ac.signal, {
+      formatPreference: 'mp4',
+      resolutionPreference: '720p',
+      qualityTier: 'balanced',
+      includeAudio: true,
+    });
+
+    assert.equal(res.extension, 'mp4');
+    assert.equal(res.engine, 'webcodecs');
+    assert.equal(res.width, 720);
+    assert.equal(res.height, 1280);
+    assert.equal(res.hasAudio, true);
+    assert.ok(res.blob.size > 1000);
+    const head = await readBlobHead(res.blob, 12);
+    const boxType = String.fromCharCode(head[4], head[5], head[6], head[7]);
+    assert.equal(boxType, 'ftyp');
+    assert.equal(m.videoFramesCreated, m.videoFramesClosed);
+    assert.equal(m.audioDataCreated, m.audioDataClosed);
+    assert.equal(m.videoEncodersCreated, m.videoEncodersClosed);
+    assert.equal(m.audioEncodersCreated, m.audioEncodersClosed);
+    assert.equal(m.postCloseCalls, 0);
+    console.log(
+      `✓ Test Phase 3: 3D Story Cinema MP4 Export (${res.blob.size} bytes, ${m.videoFramesCreated} frames, 0 leaks)`
+    );
+  }
+
+  console.log('\n✅ All Phase 1, Phase 2 & Phase 3 automated scenarios passed!');
 }
 
 runAllTests().catch((err) => {

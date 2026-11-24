@@ -47,7 +47,7 @@ interface SlidesEditorPanelProps {
   onAiVoiceChange: (voice: AiVoiceName) => void;
   onSelectSlide: (idx: number) => void;
   onUpdateSlide: (idx: number, updated: QuestionSlide) => void;
-  onAddSlide: () => void;
+  onAddSlide: (slideType?: SlideType) => void;
   onDuplicateSlide: (idx: number) => void;
   onDeleteSlide: (idx: number) => void;
   onReorderSlide?: (fromIdx: number, toIdx: number) => void;
@@ -163,12 +163,24 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
     let fileName = 'ai-clip.wav';
 
     if (target === 'question') {
-      textToSpeak = activeSlide.question.trim();
+      textToSpeak =
+        activeSlideType === 'fillBlank'
+          ? activeSlide.question.replace(/_{2,}/g, ' فراغ ').trim()
+          : activeSlide.question.trim();
       fileName = 'ai-question.wav';
     } else if (target === 'answer') {
-      const ansIdx = activeSlideType === 'clues' ? 3 : activeSlide.correctIndex;
-      const ansOpt = activeSlide.options[ansIdx] || '';
-      textToSpeak = `الإجابة الصحيحة هي: ${ansOpt}`;
+      if (activeSlideType === 'story') {
+        textToSpeak = (activeSlide.explanationText || activeSlide.options[0] || '').trim();
+      } else {
+        const ansIdx = activeSlideType === 'clues' ? 3 : activeSlide.correctIndex;
+        const ansOpt = activeSlide.options[ansIdx] || '';
+        textToSpeak =
+          activeSlideType === 'order'
+            ? `الترتيب الصحيح هو: ${activeSlide.options.filter(Boolean).join('، ثم ')}`
+            : activeSlideType === 'fillBlank'
+              ? `الكلمة الصحيحة هي: ${ansOpt}`
+              : `الإجابة الصحيحة هي: ${ansOpt}`;
+      }
       fileName = 'ai-answer.wav';
     } else {
       textToSpeak = activeSlide.options[target]?.trim() || '';
@@ -265,13 +277,23 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
         }
 
         if ((voiceMode === 'questionAndAnswer' || voiceMode === 'full') && !workingSlide.voiceover?.answer) {
-          const ansIdx =
-            workingSlide.slideType === 'clues' ? 3 : workingSlide.correctIndex;
+          const st = workingSlide.slideType || 'multiple';
+          const ansIdx = st === 'clues' ? 3 : workingSlide.correctIndex;
           const ansOpt = workingSlide.options[ansIdx]?.trim() || '';
-          if (ansOpt) {
+          const ansPhrase =
+            st === 'story'
+              ? (workingSlide.explanationText || '').trim()
+              : st === 'order'
+                ? `الترتيب الصحيح هو: ${workingSlide.options.filter(Boolean).join('، ثم ')}`
+                : ansOpt
+                  ? st === 'fillBlank'
+                    ? `الكلمة الصحيحة هي: ${ansOpt}`
+                    : `الإجابة الصحيحة هي: ${ansOpt}`
+                  : '';
+          if (ansPhrase) {
             setVoiceStepText(`سؤال ${sIdx + 1}/${slides.length}: الحل...`);
             const clip = await generateSingleTtsClip(
-              `الإجابة الصحيحة هي: ${ansOpt}`,
+              ansPhrase,
               aiVoiceName,
               `ai-s${sIdx + 1}-ans.wav`
             );
@@ -387,7 +409,9 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
       opts[0] === 'الخيار الأول' ||
       opts[0] === 'صح' ||
       opts[0] === 'الطرف الأول' ||
-      opts[0] === 'التلميح الأول';
+      opts[0] === 'التلميح الأول' ||
+      opts[0] === 'الخطوة 1 (الأولى)' ||
+      opts[0] === 'النقطة الأولى في المشهد';
 
     if (nextType === 'trueFalse') {
       onUpdateSlide(activeIndex, {
@@ -429,6 +453,61 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
       return;
     }
 
+    if (nextType === 'order') {
+      onUpdateSlide(activeIndex, {
+        ...activeSlide,
+        slideType: 'order',
+        options: [
+          isGeneric ? 'الخطوة 1 (الأولى)' : opts[0] || 'الخطوة 1',
+          isGeneric ? 'الخطوة 2' : opts[1] || 'الخطوة 2',
+          isGeneric ? 'الخطوة 3' : opts[2] || 'الخطوة 3',
+          isGeneric ? 'الخطوة 4 (الأخيرة)' : opts[3] || 'الخطوة 4',
+        ],
+        correctIndex: 0,
+      });
+      return;
+    }
+
+    if (nextType === 'fillBlank') {
+      const hasBlank = /_{2,}/.test(activeSlide.question);
+      onUpdateSlide(activeIndex, {
+        ...activeSlide,
+        slideType: 'fillBlank',
+        question: hasBlank
+          ? activeSlide.question
+          : activeSlide.question.trim()
+            ? `${activeSlide.question.trim()} ____`
+            : 'أكمل الجملة التالية بكلمة ____ المناسبة',
+        options: [
+          isGeneric ? 'الكلمة الصحيحة' : opts[0] || 'الكلمة الصحيحة',
+          isGeneric ? 'بديل خاطئ 1' : opts[1] || 'بديل خاطئ 1',
+          isGeneric ? 'بديل خاطئ 2' : opts[2] || 'بديل خاطئ 2',
+          isGeneric ? 'بديل خاطئ 3' : opts[3] || 'بديل خاطئ 3',
+        ],
+        correctIndex: 0,
+      });
+      return;
+    }
+
+    if (nextType === 'story') {
+      onUpdateSlide(activeIndex, {
+        ...activeSlide,
+        slideType: 'story',
+        badgeText:
+          activeSlide.badgeText.startsWith('السؤال')
+            ? `مشهد ${activeIndex + 1}`
+            : activeSlide.badgeText,
+        options: [
+          isGeneric ? 'النقطة الأولى في المشهد' : opts[0] || 'النقطة الأولى',
+          isGeneric ? 'الحقيقة أو التفصيل الثاني' : opts[1] || 'النقطة الثانية',
+          isGeneric ? 'النتيجة أو النقطة الثالثة' : opts[2] || '',
+          isGeneric ? '' : opts[3] || '',
+        ],
+        correctIndex: 0,
+      });
+      return;
+    }
+
     onUpdateSlide(activeIndex, {
       ...activeSlide,
       slideType: 'multiple',
@@ -450,23 +529,24 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
     <div className="flex flex-col gap-3.5">
       {/* Row 1: Slide Strip */}
       <div className="flex flex-col gap-1.5">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-semibold text-[var(--pmuted)]">
-            شرائح الأسئلة ({slides.length})
+            مشاهد وشرائح الفيديو ({slides.length})
           </span>
           <button
             type="button"
-            onClick={onAddSlide}
+            onClick={() => onAddSlide(activeSlideType)}
             className="flex items-center gap-1 h-8 px-2.5 rounded-lg bg-[#00B050]/15 hover:bg-[#00B050]/25 text-[#00B050] dark:text-[#6ee7b7] border border-[#00B050]/45 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>سؤال جديد</span>
+            <span>{activeSlideType === 'story' ? 'مشهد جديد' : 'شريحة جديدة'}</span>
           </button>
         </div>
 
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
           {slides.map((s, idx) => {
             const isActive = idx === activeIndex;
+            const isStory = s.slideType === 'story';
             return (
               <div
                 key={s.id}
@@ -481,7 +561,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                   onClick={() => onSelectSlide(idx)}
                   className="px-2.5 py-1.5 text-xs font-bold whitespace-nowrap cursor-pointer"
                 >
-                  سؤال {idx + 1}
+                  {isStory ? `مشهد ${idx + 1}` : `سؤال ${idx + 1}`}
                 </button>
                 {slides.length > 1 && (
                   <button
@@ -490,8 +570,8 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                       e.stopPropagation();
                       onDeleteSlide(idx);
                     }}
-                    title={`حذف السؤال ${idx + 1}`}
-                    aria-label={`حذف السؤال ${idx + 1}`}
+                    title={`حذف ${isStory ? 'المشهد' : 'السؤال'} ${idx + 1}`}
+                    aria-label={`حذف ${isStory ? 'المشهد' : 'السؤال'} ${idx + 1}`}
                     className={`pl-2 pr-1 py-1.5 transition-colors cursor-pointer ${
                       isActive ? 'text-white/85 hover:text-white' : 'text-[var(--pmuted)] hover:text-rose-400'
                     }`}
@@ -509,7 +589,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
       <div className="flex flex-col gap-2 border-t border-[var(--pline)] pt-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm font-bold text-[var(--ptxt)] whitespace-nowrap">
-            السؤال {activeIndex + 1}
+            {activeSlideType === 'story' ? `المشهد ${activeIndex + 1}` : `الشريحة ${activeIndex + 1}`}
           </h2>
 
           <div className="flex items-center gap-1 shrink-0">
@@ -575,7 +655,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                 onClick={() =>
                   onUpdateSlide(activeIndex, {
                     ...activeSlide,
-                    badgeText: 'السؤال 1',
+                    badgeText: activeSlideType === 'story' ? 'مشهد 1' : 'السؤال 1',
                     question: '',
                     imageDataUrl: undefined,
                     imageName: undefined,
@@ -593,7 +673,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                     voiceover: undefined,
                   })
                 }
-                title="مسح حقول السؤال الحالي"
+                title="مسح حقول الشريحة الحالية"
                 className="flex items-center gap-1 h-7 px-2 rounded-md bg-[var(--surface)] hover:border-[var(--gold)] border border-[var(--pline)] text-[var(--ptxt)] text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <RotateCcw className="w-3 h-3" />
@@ -603,14 +683,17 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
           </div>
         </div>
 
-        {/* 4-Format Segmented Selector */}
-        <div className="grid grid-cols-4 gap-1 p-1 rounded-lg bg-[var(--surface)] border border-[var(--pline)]">
+        {/* 7-Format Segmented Selector (Questions + Animated Story) */}
+        <div className="grid grid-cols-3 sm:grid-cols-4 gap-1 p-1 rounded-lg bg-[var(--surface)] border border-[var(--pline)]">
           {(
             [
               { id: 'multiple', label: '4 خيارات' },
               { id: 'trueFalse', label: 'صح أم خطأ' },
               { id: 'clues', label: '3 تلميحات' },
               { id: 'versus', label: 'مقارنة VS' },
+              { id: 'order', label: 'رتّب التسلسل' },
+              { id: 'fillBlank', label: 'أكمل الفراغ' },
+              { id: 'story', label: 'مشهد قصصي 🎬' },
             ] as { id: SlideType; label: string }[]
           ).map((fmt) => (
             <button
@@ -732,7 +815,9 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                         ? '+ الطرفين والحل (4)'
                         : activeSlideType === 'clues'
                           ? '+ 3 تلميحات والحل (5)'
-                          : '+ 4 خيارات والحل (6)'}
+                          : activeSlideType === 'story'
+                            ? '+ نقاط السرد والخلاصة'
+                            : '+ 4 خيارات والحل (6)'}
                   </button>
                 </div>
               </div>
@@ -746,15 +831,21 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
       </div>
 
       {voiceError && (
-        <div className="px-3 py-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">
+        <div className="px-3 py-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-300">
           {voiceError}
         </div>
       )}
 
-      {/* Question Text + MathLive Toggle + Per-Slide Question Audio */}
+      {/* Question / Scene Hook Text + MathLive Toggle + Per-Slide Voiceover */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-bold text-[var(--ptxt)]">نص السؤال</span>
+          <span className="text-xs font-bold text-[var(--ptxt)]">
+            {activeSlideType === 'story'
+              ? 'عنوان المشهد / الخطاف الافتتاحي'
+              : activeSlideType === 'fillBlank'
+                ? 'نص الجملة (ضع ____ مكان الفراغ)'
+                : 'نص السؤال'}
+          </span>
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -844,7 +935,13 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
           onChange={(e) =>
             onUpdateSlide(activeIndex, { ...activeSlide, question: e.target.value })
           }
-          placeholder="اكتب السؤال هنا... أو استخدم زر (معادلة ∑) لإدراج الكسور والجذور"
+          placeholder={
+            activeSlideType === 'story'
+              ? 'اكتب عنوان المشهد أو الفكرة الرئيسية الجذابة...'
+              : activeSlideType === 'fillBlank'
+                ? 'مثال: عاصمة المملكة العربية السعودية هي ____'
+                : 'اكتب السؤال هنا... أو استخدم زر (معادلة ∑) لإدراج الكسور والجذور'
+          }
           className="w-full px-3.5 py-2.5 rounded-lg bg-[var(--surface)] border border-[var(--pline)] focus:border-[#00B050] focus:outline-none text-sm text-[var(--ptxt)] placeholder:text-[var(--pmuted)] resize-none leading-relaxed"
         />
         {mathTarget === 'question' && (
@@ -922,6 +1019,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                     <option value="normal">عادي (واضحة فوراً)</option>
                     <option value="blurToClear">مموّهة وتنكشف عند الجواب 🔍</option>
                     <option value="gradualClear">توضح تدريجياً أثناء العد ⏳</option>
+                    <option value="pixelate">تحدي البكسلات (مكعبات) 🟦</option>
                   </select>
                 </div>
 
@@ -962,7 +1060,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
         </div>
       </div>
 
-      {/* Options / Clues / Versus Cards */}
+      {/* Options / Clues / Versus / Order / FillBlank / Story Cards */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-bold text-[var(--ptxt)]">
@@ -972,7 +1070,13 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                 ? 'الطرفان المتنافسان VS (حدد الطرف الفائز بالأخضر)'
                 : activeSlideType === 'clues'
                   ? 'التلميحات الثلاثة + بطاقة الإجابة النهائية'
-                  : 'الخيارات الأربعة (حدد الصحيح · ✨ لتوليد الصوت)'}
+                  : activeSlideType === 'order'
+                    ? 'عناصر التسلسل بالترتيب الصحيح (#1 إلى #4)'
+                    : activeSlideType === 'fillBlank'
+                      ? 'الكلمات المقترحة لملء الفراغ (حدد الصحيحة)'
+                      : activeSlideType === 'story'
+                        ? 'نقاط السرد المتحركة في المشهد (1–4 نقاط)'
+                        : 'الخيارات الأربعة (حدد الصحيح · ✨ لتوليد الصوت)'}
           </span>
         </div>
 
@@ -985,18 +1089,25 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
           ).map((optIdx) => {
             const isClueMode = activeSlideType === 'clues';
             const isVersusMode = activeSlideType === 'versus';
-            const isCorrect = !isClueMode && activeSlide.correctIndex === optIdx;
+            const isOrderMode = activeSlideType === 'order';
+            const isStoryMode = activeSlideType === 'story';
+            const isSequentialOnly = isClueMode || isOrderMode || isStoryMode;
+            const isCorrect = !isSequentialOnly && activeSlide.correctIndex === optIdx;
             const optClip = activeSlide.voiceover?.options?.[optIdx];
             const inputKey = `opt-${optIdx}`;
             const isMathOpen = mathTarget === optIdx;
 
             const badgeLabel = isClueMode
               ? `تلميح ${optIdx + 1}`
-              : isVersusMode
-                ? optIdx === 0
-                  ? 'طرف 1'
-                  : 'طرف 2'
-                : OPTION_LETTERS[optIdx];
+              : isOrderMode
+                ? `#${optIdx + 1}`
+                : isStoryMode
+                  ? `نقطة ${optIdx + 1}`
+                  : isVersusMode
+                    ? optIdx === 0
+                      ? 'طرف 1'
+                      : 'طرف 2'
+                    : OPTION_LETTERS[optIdx];
 
             const placeholderText = isClueMode
               ? optIdx === 0
@@ -1004,13 +1115,19 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                 : optIdx === 1
                   ? 'التلميح الثاني (أقرب للحل)'
                   : 'التلميح الثالث (واضح جداً)'
-              : isVersusMode
-                ? optIdx === 0
-                  ? 'اسم الطرف الأول (يمين)'
-                  : 'اسم الطرف الثاني (يسار)'
-                : isCorrect
-                  ? 'الجواب الصحيح'
-                  : `خيار خاطئ ${optIdx + 1}`;
+              : isOrderMode
+                ? `العنصر رقم ${optIdx + 1} في الترتيب الصحيح`
+                : isStoryMode
+                  ? `نقطة ${optIdx + 1} (اتركها فارغة إذا اكتفيت بما قبلها)`
+                  : isVersusMode
+                    ? optIdx === 0
+                      ? 'اسم الطرف الأول (يمين)'
+                      : 'اسم الطرف الثاني (يسار)'
+                    : isCorrect
+                      ? activeSlideType === 'fillBlank'
+                        ? 'الكلمة الصحيحة للفراغ'
+                        : 'الجواب الصحيح'
+                      : `خيار خاطئ ${optIdx + 1}`;
 
             return (
               <div key={optIdx} className="flex flex-col gap-1.5">
@@ -1021,7 +1138,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                       : 'bg-[var(--surface)] border-[var(--pline)]'
                   }`}
                 >
-                  {isClueMode ? (
+                  {isSequentialOnly ? (
                     <span className="flex items-center justify-center min-w-[54px] h-9 px-2 rounded-lg text-[11px] font-bold bg-[var(--panel)] text-[var(--gold)] border border-[var(--pline)] shrink-0">
                       {badgeLabel}
                     </span>
@@ -1202,7 +1319,9 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-[var(--pmuted)]">
-              صوت وتوضيح الناتج الصحيح (اختياري)
+              {activeSlideType === 'story'
+                ? 'صوت ورسالة خلاصة المشهد (تظهر أسفل البطاقات)'
+                : 'صوت وتوضيح الناتج الصحيح (اختياري)'}
             </span>
             <div className="flex items-center gap-1.5">
               <input
@@ -1282,7 +1401,11 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                 explanationText: e.target.value,
               })
             }
-            placeholder="معلومة سريعة مع كشف الجواب..."
+            placeholder={
+              activeSlideType === 'story'
+                ? 'خلاصة أو معلومة ختامية تظهر بعد ظهور النقاط...'
+                : 'معلومة سريعة مع كشف الجواب...'
+            }
             className="w-full px-3.5 py-2 rounded-lg bg-[var(--surface)] border border-[var(--pline)] focus:border-[#00B050] focus:outline-none text-xs text-[var(--ptxt)] placeholder:text-[var(--pmuted)]"
           />
         </div>
@@ -1333,7 +1456,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
           />
         </div>
 
-        {/* Optional Per-Slide Difficulty Pill */}
+        {/* Optional Per-Slide Difficulty Selector */}
         <div className="flex items-center justify-between gap-2 pt-1">
           <span className="text-[11px] text-[var(--pmuted)] whitespace-nowrap">
             شارة الصعوبة (اختياري):
@@ -1341,11 +1464,11 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
           <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--surface)] border border-[var(--pline)]">
             {(
               [
-                { id: 'none', label: 'بدون', dot: '' },
-                { id: 'easy', label: 'سهل', dot: '#22C55E' },
-                { id: 'medium', label: 'متوسط', dot: '#F59E0B' },
-                { id: 'hard', label: 'صعب', dot: '#EF4444' },
-              ] as { id: SlideDifficulty; label: string; dot: string }[]
+                { id: 'none', label: 'بدون', activeClass: 'bg-[#00B050] text-white' },
+                { id: 'easy', label: 'سهل', activeClass: 'bg-emerald-600 text-white' },
+                { id: 'medium', label: 'متوسط', activeClass: 'bg-amber-600 text-white' },
+                { id: 'hard', label: 'صعب', activeClass: 'bg-rose-600 text-white' },
+              ] as { id: SlideDifficulty; label: string; activeClass: string }[]
             ).map((d) => {
               const active = (activeSlide.difficulty || 'none') === d.id;
               return (
@@ -1355,19 +1478,13 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                   onClick={() =>
                     onUpdateSlide(activeIndex, { ...activeSlide, difficulty: d.id })
                   }
-                  className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
                     active
-                      ? 'bg-[#00B050] text-white'
+                      ? d.activeClass
                       : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
                   }`}
                 >
-                  {d.dot && (
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: active ? '#FFFFFF' : d.dot }}
-                    />
-                  )}
-                  <span>{d.label}</span>
+                  {d.label}
                 </button>
               );
             })}

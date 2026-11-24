@@ -47,6 +47,7 @@ import {
 import { readFileAsDataUrl } from '../storage/projectStore';
 import { saveOrDownloadBlob } from '../utils/nativeDownload';
 import {
+  AnimatedMotionBg,
   AnimationStyle,
   BackgroundMotion,
   BoxBorderStyle,
@@ -65,6 +66,7 @@ import {
   PrizeLadderStyle,
   QuestionTextAlign,
   RevealStyle,
+  STUDIO_THEME_ORDER,
   SlideTransitionStyle,
   TemplateSettings,
   ThemeApplyMode,
@@ -1218,29 +1220,44 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
         {isSectionOpen('backdrop') && (
           <div className="p-3.5 border-t border-[var(--pline)] flex flex-col gap-3">
 
-        {/* Persistent Mode Switch: Apply Backdrop Only vs Full Theme Override */}
-        <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+        {/* Persistent Mode Switch: Apply Backdrop Only vs Full Theme Override + Smart Randomizer */}
+        <div className="flex flex-col gap-1.5">
+          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+            <button
+              type="button"
+              onClick={() => patch({ themeApplyMode: 'bgOnly' })}
+              className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                themeApplyMode === 'bgOnly'
+                  ? 'bg-[#00B050] text-white'
+                  : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+              }`}
+            >
+              خلفية فقط (حفظ تعديلاتي)
+            </button>
+            <button
+              type="button"
+              onClick={() => patch({ themeApplyMode: 'full' })}
+              className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                themeApplyMode === 'full'
+                  ? 'bg-[var(--gold)] text-[#0c0c0c]'
+                  : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+              }`}
+            >
+              تطبيق الثيم كامل (ألوان + شكل)
+            </button>
+          </div>
           <button
             type="button"
-            onClick={() => patch({ themeApplyMode: 'bgOnly' })}
-            className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-              themeApplyMode === 'bgOnly'
-                ? 'bg-[#00B050] text-white'
-                : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
-            }`}
+            onClick={() => {
+              const pool = STUDIO_THEME_ORDER.filter((id) => id !== template.presetId);
+              const picked = pool[Math.floor(Math.random() * pool.length)] || STUDIO_THEME_ORDER[0];
+              onChange(applyStudioThemePreset(template, picked), true);
+              showToast('تم تطبيق ثيم عشوائي متناسق 🎲');
+            }}
+            className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-[var(--surface)] hover:border-[var(--gold)] border border-[var(--pline)] text-xs font-bold text-[var(--ptxt)] transition-colors cursor-pointer"
           >
-            خلفية فقط (حفظ تعديلاتي)
-          </button>
-          <button
-            type="button"
-            onClick={() => patch({ themeApplyMode: 'full' })}
-            className={`px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-              themeApplyMode === 'full'
-                ? 'bg-[var(--gold)] text-[#0c0c0c]'
-                : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
-            }`}
-          >
-            تطبيق الثيم كامل (ألوان + شكل)
+            <Wand2 className="w-3.5 h-3.5 text-[var(--gold)]" />
+            <span>ثيم عشوائي ذكي 🎲</span>
           </button>
         </div>
 
@@ -1248,6 +1265,7 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
           {PRESET_BACKDROPS.map((preset) => {
             const active =
               template.backgroundType === 'preset' && template.presetId === preset.id;
+            const previewStyle = applyStudioThemePreset(DEFAULT_TEMPLATE, preset.id);
             return (
               <button
                 key={preset.id}
@@ -1259,30 +1277,56 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
                     : 'border-[var(--pline)] hover:border-[var(--gold)]'
                 }`}
               >
-                {preset.src ? (
-                  <img
-                    src={preset.src}
-                    alt={preset.label}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-20 object-cover"
-                  />
-                ) : (
-                  <div
-                    className="w-full h-20 flex items-center justify-center"
-                    style={{
-                      background: `radial-gradient(circle at 50% 30%, ${preset.gradientInner}, ${preset.gradientOuter} 75%)`,
-                    }}
-                  >
-                    <span
-                      className="w-8 h-5 rounded border-2"
-                      style={{
-                        backgroundColor: preset.swatchColor,
-                        borderColor: '#d4a73a',
-                      }}
+                <div
+                  className="relative w-full h-22 flex flex-col items-center justify-center gap-1 px-2 py-2 overflow-hidden"
+                  style={
+                    preset.src
+                      ? undefined
+                      : {
+                          background: `radial-gradient(circle at 50% 28%, ${preset.gradientInner}, ${preset.gradientOuter} 78%)`,
+                        }
+                  }
+                >
+                  {preset.src && (
+                    <img
+                      src={preset.src}
+                      alt={preset.label}
+                      referrerPolicy="no-referrer"
+                      className="absolute inset-0 w-full h-full object-cover"
                     />
+                  )}
+                  <div className="relative z-10 w-full flex flex-col items-center gap-1">
+                    <div
+                      className="w-full h-5 rounded border flex items-center justify-center"
+                      style={{
+                        backgroundColor: previewStyle.questionBoxColor,
+                        borderColor: previewStyle.questionBorderColor,
+                      }}
+                    >
+                      <span
+                        className="w-8 h-1 rounded-full opacity-85"
+                        style={{ backgroundColor: previewStyle.questionTextColor }}
+                      />
+                    </div>
+                    <div className="w-full grid grid-cols-2 gap-1">
+                      <span
+                        className="h-3 rounded border"
+                        style={{
+                          backgroundColor: previewStyle.optionBoxColor,
+                          borderColor: previewStyle.optionBorderColor,
+                        }}
+                      />
+                      <span
+                        className="h-3 rounded border"
+                        style={{
+                          backgroundColor: previewStyle.optionBoxColor,
+                          borderColor: previewStyle.optionBorderColor,
+                        }}
+                      />
+                    </div>
                   </div>
-                )}
-                <div className="px-2 py-1.5 bg-[var(--surface)] text-[10px] font-bold text-[var(--ptxt)] truncate">
+                </div>
+                <div className="px-1.5 py-1.5 bg-[var(--surface)] text-[10px] font-bold text-[var(--ptxt)] truncate">
                   {preset.label}
                 </div>
               </button>
@@ -1378,19 +1422,36 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
           </label>
         </div>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-[var(--pmuted)]">حركة الخلفية وإضاءة الجو</span>
-          <select
-            value={template.bgMotion || 'none'}
-            onChange={(e) => patch({ bgMotion: e.target.value as BackgroundMotion })}
-            className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--pline)] text-xs text-[var(--ptxt)] focus:border-[#00B050] focus:outline-none"
-          >
-            <option value="none">ثابت بدون حركة</option>
-            <option value="slowZoom">زوم سينمائي بطيء (Ken Burns)</option>
-            <option value="particles">جزيئات ضوئية متحركة (Bokeh / Sparkles)</option>
-            <option value="zoomAndParticles">زوم سينمائي + جزيئات ضوئية معاً</option>
-          </select>
-        </label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-[var(--pmuted)]">حركة الخلفية وإضاءة الجو</span>
+            <select
+              value={template.bgMotion || 'none'}
+              onChange={(e) => patch({ bgMotion: e.target.value as BackgroundMotion })}
+              className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--pline)] text-xs text-[var(--ptxt)] focus:border-[#00B050] focus:outline-none"
+            >
+              <option value="none">ثابت بدون حركة</option>
+              <option value="slowZoom">زوم سينمائي بطيء (Ken Burns)</option>
+              <option value="particles">جزيئات ضوئية متحركة (Bokeh / Sparkles)</option>
+              <option value="zoomAndParticles">زوم سينمائي + جزيئات ضوئية معاً</option>
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-[var(--pmuted)]">مشهد خلفية متحركة (Video FX)</span>
+            <select
+              value={template.animatedMotionBg || 'none'}
+              onChange={(e) => patch({ animatedMotionBg: e.target.value as AnimatedMotionBg })}
+              className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--pline)] text-xs text-[var(--ptxt)] focus:border-[#00B050] focus:outline-none"
+            >
+              <option value="none">بدون طبقة مشهد متحرك</option>
+              <option value="neonGrid">شبكة نيون ثلاثية الأبعاد 🎮</option>
+              <option value="auroraWave">موجات الشفق السينمائية 🌌</option>
+              <option value="starfieldWarp">نجوم فضائية سريعة 🌠</option>
+              <option value="stadiumLights">أضواء ملاعب وأشعة حماسية 🏟️</option>
+            </select>
+          </label>
+        </div>
           </div>
         )}
       </section>
@@ -3214,6 +3275,47 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
             إظهار عداد رقم السؤال وشريط التقدم أعلى الشاشة (سؤال 2 من 5)
           </span>
         </label>
+
+        <label className="flex items-center gap-2 cursor-pointer pt-1">
+          <input
+            type="checkbox"
+            checked={Boolean(template.showAutoCaptions)}
+            onChange={(e) => patch({ showAutoCaptions: e.target.checked })}
+            className="w-4 h-4 accent-[#00B050] rounded cursor-pointer"
+          />
+          <span className="text-xs text-[var(--ptxt)]">
+            إظهار شريط الترجمة التلقائي أسفل الفيديو (Auto-Captions)
+          </span>
+        </label>
+
+        <div className="flex flex-col gap-1.5 pt-1 border-t border-[var(--pline)]/60">
+          <span className="text-xs text-[var(--pmuted)]">
+            شريط دعوة التفاعل المستمر أسفل الشاشة (CTA اختياري)
+          </span>
+          <input
+            type="text"
+            value={template.ctaOverlayText || ''}
+            onChange={(e) => patch({ ctaOverlayText: e.target.value })}
+            placeholder="مثال: كم جبت؟ اكتب نتيجتك بالتعليقات 👇"
+            className="w-full px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--pline)] focus:border-[#00B050] focus:outline-none text-xs text-[var(--ptxt)] placeholder:text-[var(--pmuted)]"
+          />
+          <div className="flex flex-wrap gap-1">
+            {[
+              'كم جبت؟ اكتب بالتعليقات 👇',
+              'اشترك لمزيد من الفيديوهات 🔥',
+              'شارك الفيديو مع أصدقائك 🚀',
+            ].map((ctaTxt) => (
+              <button
+                key={ctaTxt}
+                type="button"
+                onClick={() => patch({ ctaOverlayText: ctaTxt })}
+                className="px-2 py-0.5 rounded bg-[var(--surface)] border border-[var(--pline)] hover:border-[#00B050] text-[10px] text-[var(--pmuted)] hover:text-[var(--ptxt)] cursor-pointer"
+              >
+                {ctaTxt}
+              </button>
+            ))}
+          </div>
+        </div>
           </div>
         )}
       </section>

@@ -4,11 +4,15 @@ import {
   AudioSlotId,
   BuiltInSfxId,
   QuestionSlide,
+  QuizProject,
   SlideAudioClip,
+  StoryScene,
   TemplateSettings,
   TimingSettings,
   computeProjectTimeline,
+  computeStoryTimeline,
   getIntroHookDuration,
+  getStoryTotalDuration,
   getTotalDuration,
 } from '../types/quiz';
 
@@ -949,12 +953,25 @@ class SoundEngine {
 
       // 1. Question enter: monophonic voiceover (bounded before countdown ticks!) OR short SFX
       const qBuf = lookupBuf(slide?.voiceover?.question?.dataUrl);
+      const isStory = slide?.slideType === 'story';
+      const storyCount = isStory
+        ? Math.max(
+            1,
+            Math.min(
+              4,
+              (slide?.options || []).filter((o) => typeof o === 'string' && o.trim().length > 0)
+                .length || 3
+            )
+          )
+        : 4;
       const optCount =
         slide?.slideType === 'trueFalse' || slide?.slideType === 'versus'
           ? 2
           : slide?.slideType === 'clues'
             ? 3
-            : 4;
+            : isStory
+              ? storyCount
+              : 4;
       const hasAnyOptVoice = Array.from({ length: optCount }).some((_, oi) =>
         Boolean(lookupBuf(slide?.voiceover?.options?.[oi]?.dataUrl))
       );
@@ -1026,38 +1043,39 @@ class SoundEngine {
         }
       }
 
-      // 3. Countdown ticks: strictly bounded so ticks never overlap each other or bleed into suspense
-      const totalTicks = Math.floor(timing.thinkingDuration);
-      const tickBuf = lookupBuf(audio.countdownTick.customDataUrl);
-      for (let sec = 0; sec < totalTicks; sec++) {
-        const tTick = tThink + sec;
-        const tickSecond = totalTicks - sec;
-        const nextTickOrSus = Math.min(tTick + 0.88, tSus - 0.02);
-        this.scheduleSlotInOffline(
-          offline,
-          limiter,
-          audio.countdownTick,
-          tickBuf,
-          tTick,
-          Math.max(tTick + 0.08, nextTickOrSus),
-          tickSecond <= urgentThreshold,
-          timing.suspenseDuration
-        );
-      }
+      // 3 & 4. Countdown ticks & Suspense (skipped cleanly for animated Story scenes)
+      const susDur = isStory ? 0 : Math.max(0, timing.suspenseDuration ?? 0);
+      if (!isStory) {
+        const totalTicks = Math.floor(timing.thinkingDuration);
+        const tickBuf = lookupBuf(audio.countdownTick.customDataUrl);
+        for (let sec = 0; sec < totalTicks; sec++) {
+          const tTick = tThink + sec;
+          const tickSecond = totalTicks - sec;
+          const nextTickOrSus = Math.min(tTick + 0.88, tSus - 0.02);
+          this.scheduleSlotInOffline(
+            offline,
+            limiter,
+            audio.countdownTick,
+            tickBuf,
+            tTick,
+            Math.max(tTick + 0.08, nextTickOrSus),
+            tickSecond <= urgentThreshold,
+            timing.suspenseDuration
+          );
+        }
 
-      // 4. Suspense: duration-matched synth OR custom clip trimmed cleanly before reveal
-      const susDur = Math.max(0, timing.suspenseDuration ?? 0);
-      if (susDur > 0) {
-        this.scheduleSlotInOffline(
-          offline,
-          limiter,
-          audio.suspense,
-          lookupBuf(audio.suspense.customDataUrl),
-          tSus,
-          Math.max(tSus + 0.15, tReveal - 0.02),
-          false,
-          susDur
-        );
+        if (susDur > 0) {
+          this.scheduleSlotInOffline(
+            offline,
+            limiter,
+            audio.suspense,
+            lookupBuf(audio.suspense.customDataUrl),
+            tSus,
+            Math.max(tSus + 0.15, tReveal - 0.02),
+            false,
+            susDur
+          );
+        }
       }
 
       // 5. Correct Answer Reveal: voiceover OR fanfare, strictly bounded before next slide
@@ -1069,7 +1087,7 @@ class SoundEngine {
           volume: 1,
           maxEnd: Math.min(totalDuration, nextSlideStart - 0.02),
         });
-      } else {
+      } else if (!isStory) {
         this.scheduleSlotInOffline(
           offline,
           limiter,
@@ -1195,6 +1213,264 @@ class SoundEngine {
       suspenseDurationSec,
       Math.max(0.06, maxEndTime - when)
     );
+  }
+
+  public async preloadStoryAudio(
+    audio: AudioSettings,
+    scenes: StoryScene[] = [],
+    targetCtx?: BaseAudioContext,
+    template?: TemplateSettings
+  ): Promise<void> {
+    const tasks: Promise<unknown>[] = [];
+    if (audio.bgMusic?.sourceType === 'custom' && audio.bgMusic.customDataUrl) {
+      tasks.push(this.decodeDataUrl(audio.bgMusic.customDataUrl, targetCtx));
+    }
+    if (template?.introHookAudio?.dataUrl) {
+      tasks.push(this.decodeDataUrl(template.introHookAudio.dataUrl, targetCtx));
+    }
+    for (const sc of scenes) {
+      for (const ln of sc.lines || []) {
+        if (ln.voiceClip?.dataUrl) {
+          tasks.push(this.decodeDataUrl(ln.voiceClip.dataUrl, targetCtx));
+        }
+      }
+    }
+    await Promise.all(tasks);
+  }
+
+  public async syncStoryAudioDurations(
+    project: QuizProject,
+    targetCtx?: BaseAudioContext
+  ): Promise<QuizProject> {
+    const scenes = project.storyScenes ?? [];
+    await this.preloadStoryAudio(project.audio, scenes, targetCtx, project.template);
+
+    const syncClip = (clip?: SlideAudioClip): SlideAudioClip | undefined => {
+      if (!clip?.dataUrl) return clip;
+      const exact = this.getExactDuration(clip.dataUrl, clip.duration);
+      return Math.abs(exact - clip.duration) > 0.01 ? { ...clip, duration: exact } : clip;
+    };
+
+    const nextScenes: StoryScene[] = scenes.map((sc) => ({
+      ...sc,
+      lines: (sc.lines || []).map((ln) =>
+        ln.voiceClip?.dataUrl ? { ...ln, voiceClip: syncClip(ln.voiceClip) } : ln
+      ),
+    }));
+
+    const nextTemplate = project.template.introHookAudio?.dataUrl
+      ? { ...project.template, introHookAudio: syncClip(project.template.introHookAudio) }
+      : project.template;
+
+    const bgCfg = project.audio.bgMusic;
+    const bgExact =
+      bgCfg.sourceType === 'custom' && bgCfg.customDataUrl
+        ? this.getExactDuration(bgCfg.customDataUrl, bgCfg.duration ?? 0)
+        : 0;
+    const nextAudio: AudioSettings =
+      bgExact > 0
+        ? { ...project.audio, bgMusic: { ...bgCfg, duration: bgExact } }
+        : project.audio;
+
+    return {
+      ...project,
+      storyScenes: nextScenes,
+      template: nextTemplate,
+      audio: nextAudio,
+    };
+  }
+
+  public async renderOfflineStoryExportMix(
+    project: QuizProject,
+    sampleRate = 48000
+  ): Promise<RenderedExportAudio | null> {
+    if (typeof OfflineAudioContext === 'undefined') {
+      return null;
+    }
+
+    const scenes = project.storyScenes ?? [];
+    const totalDuration = Math.max(
+      0.5,
+      getStoryTotalDuration(scenes, project.timing, project.storySettings, project.template)
+    );
+
+    let offline: OfflineAudioContext;
+    try {
+      offline = new OfflineAudioContext(2, Math.ceil((totalDuration + 0.15) * sampleRate), sampleRate);
+    } catch {
+      const fallbackRate = 44100;
+      offline = new OfflineAudioContext(2, Math.ceil((totalDuration + 0.15) * fallbackRate), fallbackRate);
+    }
+
+    const limiter = offline.createDynamicsCompressor();
+    limiter.threshold.setValueAtTime(-3, 0);
+    limiter.knee.setValueAtTime(6, 0);
+    limiter.ratio.setValueAtTime(8, 0);
+    limiter.attack.setValueAtTime(0.003, 0);
+    limiter.release.setValueAtTime(0.12, 0);
+    limiter.connect(offline.destination);
+
+    await this.preloadStoryAudio(project.audio, scenes, offline, project.template);
+    const cache = this.getCacheForContext(offline);
+    const lookupBuf = (dataUrl?: string): AudioBuffer | null => {
+      if (!dataUrl) return null;
+      return cache.get(this.getDataUrlKey(dataUrl)) ?? null;
+    };
+
+    const schedules = computeStoryTimeline(
+      scenes,
+      project.timing,
+      project.storySettings,
+      project.template
+    );
+    const voiceQueue: ScheduledVoiceItem[] = [];
+    const speechIntervals: Array<{ start: number; end: number }> = [];
+
+    const introDur = getIntroHookDuration(project.template, project.timing);
+    if (introDur > 0 && scenes.length > 0) {
+      const endBound = Math.min(totalDuration, schedules[0]?.startTime ?? introDur);
+      const hookSfx = project.template.introHookSfx ?? 'whoosh';
+      const hookBuf = lookupBuf(project.template.introHookAudio?.dataUrl);
+      if (hookSfx && hookSfx !== 'none') {
+        this.playBuiltInSfx(
+          hookSfx,
+          hookBuf ? 0.4 : 0.65,
+          offline,
+          limiter,
+          0,
+          false,
+          1.6,
+          Math.min(0.32, Math.max(0.15, endBound - 0.02))
+        );
+      }
+      if (hookBuf) {
+        voiceQueue.push({
+          start: 0,
+          buffer: hookBuf,
+          volume: 1,
+          maxEnd: endBound - 0.02,
+        });
+      }
+    }
+
+    for (let sIdx = 0; sIdx < schedules.length; sIdx++) {
+      const sched = schedules[sIdx];
+      const scene = scenes[sIdx];
+      const nextSceneStart =
+        sIdx < schedules.length - 1 ? schedules[sIdx + 1].startTime : totalDuration;
+
+      if (sIdx > 0) {
+        this.playBuiltInSfx(
+          'whoosh',
+          0.32,
+          offline,
+          limiter,
+          Math.max(0, sched.startTime),
+          false,
+          1.0,
+          0.28
+        );
+      }
+
+      for (let lIdx = 0; lIdx < sched.lines.length; lIdx++) {
+        const ls = sched.lines[lIdx];
+        const line = scene.lines[lIdx];
+        const vBuf = lookupBuf(line?.voiceClip?.dataUrl);
+        if (vBuf) {
+          const nextLineStart =
+            lIdx < sched.lines.length - 1 ? sched.lines[lIdx + 1].startTime : nextSceneStart;
+          voiceQueue.push({
+            start: ls.startTime,
+            buffer: vBuf,
+            volume: 1,
+            maxEnd: Math.min(totalDuration, nextLineStart - 0.02),
+          });
+        }
+      }
+    }
+
+    voiceQueue.sort((a, b) => a.start - b.start);
+    for (let i = 0; i < voiceQueue.length; i++) {
+      const curr = voiceQueue[i];
+      const nextVoice = voiceQueue[i + 1];
+      const hardEnd = nextVoice
+        ? Math.min(curr.maxEnd, Math.max(curr.start + 0.04, nextVoice.start - 0.02))
+        : curr.maxEnd;
+      const effectiveEnd = Math.min(curr.start + curr.buffer.duration, hardEnd);
+      if (effectiveEnd > curr.start + 0.04) {
+        this.scheduleBufferWithEnvelope(
+          offline,
+          curr.buffer,
+          curr.volume,
+          limiter,
+          curr.start,
+          effectiveEnd
+        );
+        if (effectiveEnd - curr.start > 0.2) {
+          speechIntervals.push({ start: curr.start, end: effectiveEnd });
+        }
+      }
+    }
+
+    const bgCfg = project.audio.bgMusic;
+    if (bgCfg && bgCfg.volume > 0.001 && bgCfg.sourceType === 'custom' && bgCfg.customDataUrl) {
+      const bgBuf = lookupBuf(bgCfg.customDataUrl);
+      if (bgBuf) {
+        const bgSrc = offline.createBufferSource();
+        bgSrc.buffer = bgBuf;
+        bgSrc.loop = true;
+
+        const bgGain = offline.createGain();
+        const baseVol = bgCfg.volume;
+        const fadeInEnd = Math.min(0.25, totalDuration * 0.2);
+        const tailStart = Math.max(fadeInEnd + 0.08, totalDuration - 0.55);
+        bgGain.gain.setValueAtTime(0.0001, 0);
+        bgGain.gain.linearRampToValueAtTime(baseVol, fadeInEnd);
+        bgSrc.connect(bgGain);
+        bgGain.connect(limiter);
+        this.bgNodes.set(offline, { gain: bgGain, baseVolume: baseVol });
+
+        if (
+          project.timing.autoDuckMusic !== false &&
+          speechIntervals.length > 0 &&
+          tailStart > fadeInEnd + 0.2
+        ) {
+          this.scheduleBgDuckIntervals(
+            offline,
+            speechIntervals,
+            fadeInEnd + 0.02,
+            project.timing.bgMusicDuckRatio ?? 0.24,
+            tailStart - 0.03
+          );
+        }
+
+        try {
+          bgGain.gain.cancelScheduledValues(tailStart);
+          bgGain.gain.setValueAtTime(baseVol, tailStart);
+          bgGain.gain.linearRampToValueAtTime(0.0001, totalDuration + 0.05);
+        } catch {
+          // ignore
+        }
+        bgSrc.start(0);
+        bgSrc.stop(totalDuration + 0.08);
+      }
+    }
+
+    const timeoutMs = Math.max(15_000, Math.min(45_000, Math.round(totalDuration * 120)));
+    let renderTimerId = 0;
+    const renderTimeout = new Promise<AudioBuffer | null>((resolve) => {
+      renderTimerId = window.setTimeout(() => resolve(null), timeoutMs);
+    });
+    let rendered: AudioBuffer | null = null;
+    try {
+      rendered = await Promise.race([
+        offline.startRendering().catch(() => null),
+        renderTimeout,
+      ]);
+    } finally {
+      window.clearTimeout(renderTimerId);
+    }
+    return rendered ? { buffer: rendered, speechIntervals } : null;
   }
 }
 

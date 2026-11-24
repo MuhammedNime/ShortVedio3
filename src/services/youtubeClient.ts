@@ -343,7 +343,7 @@ export async function completeApkWebLoginFromBrowser(): Promise<{
     channel: res.channel,
   });
   return {
-    deepLinkUrl: `com.shortsquiz.studio0://youtube-auth#payload=${payload}`,
+    deepLinkUrl: `com.shortsquiz.studiopro://youtube-auth#payload=${payload}`,
     email: res.email,
     channel: res.channel,
   };
@@ -356,7 +356,7 @@ async function connectViaNativeExternalBrowser(): Promise<{
 }> {
   registerPersistentAndroidDeepLinkHandler();
   const res = await fetch(
-    `${BUILD_API_BASE}/api/youtube/auth-url?appRedirect=${encodeURIComponent('com.shortsquiz.studio0://youtube-auth')}`
+    `${BUILD_API_BASE}/api/youtube/auth-url?appRedirect=${encodeURIComponent('com.shortsquiz.studiopro://youtube-auth')}`
   );
   const data = (await res.json()) as { url?: string; error?: string };
   if (!res.ok || !data.url) {

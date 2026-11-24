@@ -1,12 +1,21 @@
 import {
+  DEFAULT_AUDIO,
   DEFAULT_TEMPLATE,
   DEFAULT_TIMING,
-  DEFAULT_AUDIO,
   QuestionSlide,
   QuizProject,
+  StoryCharacterProfile,
+  StoryCinemaSettings,
+  StoryDialogueLine,
+  StoryScene,
   VideoAspectRatio,
   createDefaultProject,
 } from '../types/quiz';
+import {
+  DEFAULT_STORY_CINEMA_SETTINGS,
+  createDefaultStoryCharacters,
+  createDefaultStoryScenes,
+} from '../data/storyAssets';
 
 const DB_NAME = 'shorts_quiz_studio_db';
 const DB_VERSION = 1;
@@ -15,7 +24,7 @@ const ACTIVE_PROJECT_KEY = 'active_project_v1';
 const LIBRARY_INDEX_KEY = 'projects_library_index_v1';
 const ACTIVE_PROJECT_ID_KEY = 'active_project_id_v1';
 const PROJECT_ITEM_PREFIX = 'project_item_';
-const CURRENT_SCHEMA_VERSION = 8;
+const CURRENT_SCHEMA_VERSION = 9;
 
 export interface ProjectSummary {
   id: string;
@@ -158,7 +167,10 @@ function sanitizeSlide(raw: Partial<QuestionSlide> | null | undefined, idx: numb
   const slideType =
     raw?.slideType === 'trueFalse' ||
     raw?.slideType === 'clues' ||
-    raw?.slideType === 'versus'
+    raw?.slideType === 'versus' ||
+    raw?.slideType === 'order' ||
+    raw?.slideType === 'fillBlank' ||
+    raw?.slideType === 'story'
       ? raw.slideType
       : 'multiple';
   const rawOpts = Array.isArray(raw?.options) ? raw.options : [];
@@ -171,7 +183,11 @@ function sanitizeSlide(raw: Partial<QuestionSlide> | null | undefined, idx: numb
           ? 'التلميح الأول'
           : slideType === 'versus'
             ? 'الطرف الأول'
-            : 'الخيار الأول',
+            : slideType === 'order'
+              ? 'الخطوة / العنصر 1'
+              : slideType === 'story'
+                ? 'النقطة الأولى في القصة'
+                : 'الخيار الأول',
     typeof rawOpts[1] === 'string'
       ? rawOpts[1]
       : slideType === 'trueFalse'
@@ -180,21 +196,33 @@ function sanitizeSlide(raw: Partial<QuestionSlide> | null | undefined, idx: numb
           ? 'التلميح الثاني'
           : slideType === 'versus'
             ? 'الطرف الثاني'
-            : 'الخيار الثاني',
+            : slideType === 'order'
+              ? 'الخطوة / العنصر 2'
+              : slideType === 'story'
+                ? 'النقطة الثانية في القصة'
+                : 'الخيار الثاني',
     typeof rawOpts[2] === 'string'
       ? rawOpts[2]
       : slideType === 'trueFalse' || slideType === 'versus'
         ? ''
         : slideType === 'clues'
           ? 'التلميح الثالث'
-          : 'الخيار الثالث',
+          : slideType === 'order'
+            ? 'الخطوة / العنصر 3'
+            : slideType === 'story'
+              ? 'النقطة الثالثة في القصة'
+              : 'الخيار الثالث',
     typeof rawOpts[3] === 'string'
       ? rawOpts[3]
       : slideType === 'trueFalse' || slideType === 'versus'
         ? ''
         : slideType === 'clues'
           ? 'الإجابة الصحيحة'
-          : 'الخيار الرابع',
+          : slideType === 'order'
+            ? 'الخطوة / العنصر 4'
+            : slideType === 'story'
+              ? ''
+              : 'الخيار الرابع',
   ];
   const rawIdx = Number(raw?.correctIndex);
   const maxOptIdx = slideType === 'trueFalse' || slideType === 'versus' ? 1 : 3;
@@ -208,7 +236,9 @@ function sanitizeSlide(raw: Partial<QuestionSlide> | null | undefined, idx: numb
           | 3);
 
   const imageChallengeMode =
-    raw?.imageChallengeMode === 'blurToClear' || raw?.imageChallengeMode === 'gradualClear'
+    raw?.imageChallengeMode === 'blurToClear' ||
+    raw?.imageChallengeMode === 'gradualClear' ||
+    raw?.imageChallengeMode === 'pixelate'
       ? raw.imageChallengeMode
       : 'normal';
   const rawBlur = Number(raw?.imageBlurStrength);
@@ -243,13 +273,149 @@ function sanitizeNumber(val: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function sanitizeStoryCharacter(
+  raw: Partial<StoryCharacterProfile> | null | undefined,
+  idx: number
+): StoryCharacterProfile {
+  const defaults = createDefaultStoryCharacters();
+  const fb = defaults[idx % defaults.length];
+  const validVoice =
+    raw?.voiceName === 'Kore' ||
+    raw?.voiceName === 'Puck' ||
+    raw?.voiceName === 'Charon' ||
+    raw?.voiceName === 'Fenrir' ||
+    raw?.voiceName === 'Zephyr'
+      ? raw.voiceName
+      : fb.voiceName;
+  return {
+    id: typeof raw?.id === 'string' && raw.id ? raw.id : `char-${Date.now()}-${idx}`,
+    name: typeof raw?.name === 'string' && raw.name.trim() ? raw.name : fb.name,
+    roleTitle: typeof raw?.roleTitle === 'string' ? raw.roleTitle : fb.roleTitle,
+    avatarUrl: typeof raw?.avatarUrl === 'string' && raw.avatarUrl ? raw.avatarUrl : fb.avatarUrl,
+    voiceName: validVoice,
+    accentColor: typeof raw?.accentColor === 'string' && raw.accentColor ? raw.accentColor : fb.accentColor,
+  };
+}
+
+function sanitizeStoryLine(
+  raw: Partial<StoryDialogueLine> | null | undefined,
+  idx: number
+): StoryDialogueLine {
+  const pos =
+    raw?.position === 'left' || raw?.position === 'center' ? raw.position : 'right';
+  const expr =
+    raw?.expression === 'happy' ||
+    raw?.expression === 'serious' ||
+    raw?.expression === 'surprised'
+      ? raw.expression
+      : 'calm';
+  return {
+    id: typeof raw?.id === 'string' && raw.id ? raw.id : `line-${Date.now()}-${idx}`,
+    speakerId: typeof raw?.speakerId === 'string' && raw.speakerId ? raw.speakerId : 'wise_narrator',
+    position: pos,
+    expression: expr,
+    text: typeof raw?.text === 'string' ? raw.text : '',
+    durationSec:
+      typeof raw?.durationSec === 'number' && Number.isFinite(raw.durationSec)
+        ? Math.max(0.8, Math.min(20, raw.durationSec))
+        : undefined,
+    voiceClip: raw?.voiceClip?.dataUrl ? raw.voiceClip : undefined,
+  };
+}
+
+function sanitizeStoryScene(
+  raw: Partial<StoryScene> | null | undefined,
+  idx: number
+): StoryScene {
+  const cam =
+    raw?.cameraMotion === 'zoomOut' ||
+    raw?.cameraMotion === 'panLeft' ||
+    raw?.cameraMotion === 'panRight' ||
+    raw?.cameraMotion === 'breathing'
+      ? raw.cameraMotion
+      : 'zoomIn';
+  const atmo =
+    raw?.atmosphere === 'goldenDust' ||
+    raw?.atmosphere === 'starlight' ||
+    raw?.atmosphere === 'lanternGlow' ||
+    raw?.atmosphere === 'rain'
+      ? raw.atmosphere
+      : 'none';
+  const lines =
+    Array.isArray(raw?.lines) && raw.lines.length > 0
+      ? raw.lines.map((l, li) => sanitizeStoryLine(l, li))
+      : [sanitizeStoryLine({ speakerId: 'wise_narrator', text: 'مشهد قصصي جديد...' }, 0)];
+  const characterIds = Array.isArray(raw?.characterIds)
+    ? raw.characterIds.filter((c): c is string => typeof c === 'string' && Boolean(c)).slice(0, 3)
+    : ['honest_merchant', 'elder_scholar'];
+
+  return {
+    id: typeof raw?.id === 'string' && raw.id ? raw.id : `scene-${Date.now()}-${idx}`,
+    title: typeof raw?.title === 'string' && raw.title.trim() ? raw.title : `المشهد ${idx + 1}`,
+    locationId:
+      typeof raw?.locationId === 'string' && raw.locationId ? raw.locationId : 'loc_ancient_souq',
+    customLocationUrl:
+      typeof raw?.customLocationUrl === 'string' ? raw.customLocationUrl : undefined,
+    customLocationName:
+      typeof raw?.customLocationName === 'string' ? raw.customLocationName : undefined,
+    cameraMotion: cam,
+    atmosphere: atmo,
+    sceneBannerText: typeof raw?.sceneBannerText === 'string' ? raw.sceneBannerText : '',
+    characterIds,
+    lines,
+    transition: raw?.transition || 'fade',
+  };
+}
+
+export function ensureStoryDataOnProject(project: QuizProject): QuizProject {
+  if (
+    Array.isArray(project.storyCharacters) &&
+    project.storyCharacters.length > 0 &&
+    Array.isArray(project.storyScenes) &&
+    project.storyScenes.length > 0 &&
+    project.storySettings
+  ) {
+    return project;
+  }
+  return {
+    ...project,
+    storyTitle: project.storyTitle || 'ميزان الأمانة · قصة التاجر الصادق',
+    storyCharacters:
+      Array.isArray(project.storyCharacters) && project.storyCharacters.length > 0
+        ? project.storyCharacters
+        : createDefaultStoryCharacters(),
+    storyScenes:
+      Array.isArray(project.storyScenes) && project.storyScenes.length > 0
+        ? project.storyScenes
+        : createDefaultStoryScenes(),
+    storySettings: {
+      ...DEFAULT_STORY_CINEMA_SETTINGS,
+      ...(project.storySettings ?? {}),
+    },
+  };
+}
+
+export function createDefaultStoryProject(customName?: string): QuizProject {
+  const base = ensureStoryDataOnProject(createDefaultProject());
+  return {
+    ...base,
+    id: `story-proj-${Date.now()}`,
+    name: customName || 'مشروع قصة وحوار 3D',
+    studioMode: 'storyStudio',
+    storyTitle: customName || 'ميزان الأمانة · قصة التاجر الصادق',
+    updatedAt: Date.now(),
+  };
+}
+
 export function normalizeLoadedProject(
   result: Partial<QuizProject> | null | undefined
 ): QuizProject {
-  const base = createDefaultProject();
-  if (!result || !Array.isArray(result.slides) || result.slides.length === 0) {
+  const base = ensureStoryDataOnProject(createDefaultProject());
+  if (!result || (!Array.isArray(result.slides) && !Array.isArray(result.storyScenes))) {
     return base;
   }
+  const safeRawSlides =
+    Array.isArray(result.slides) && result.slides.length > 0 ? result.slides : base.slides;
 
   let mergedTemplate = {
     ...DEFAULT_TEMPLATE,
@@ -383,9 +549,12 @@ export function normalizeLoadedProject(
     optionsAppearMode: mergedTemplate.optionsAppearMode || 'stagger',
     optionTextAlign: mergedTemplate.optionTextAlign || 'auto',
     optionsRtlColumns: mergedTemplate.optionsRtlColumns ?? true,
+    animatedMotionBg: mergedTemplate.animatedMotionBg || 'none',
+    showAutoCaptions: Boolean(mergedTemplate.showAutoCaptions),
+    ctaOverlayText: typeof mergedTemplate.ctaOverlayText === 'string' ? mergedTemplate.ctaOverlayText : '',
   };
 
-  const sanitizedSlides = result.slides.map((s, i) => sanitizeSlide(s, i));
+  const sanitizedSlides = safeRawSlides.map((s, i) => sanitizeSlide(s, i));
   const rawTiming = result.timing && typeof result.timing === 'object' ? result.timing : undefined;
 
   const mergedTiming = {
@@ -427,6 +596,20 @@ export function normalizeLoadedProject(
   }
 
   const rawAudio = result.audio && typeof result.audio === 'object' ? result.audio : undefined;
+  const sanitizedStoryChars =
+    Array.isArray(result.storyCharacters) && result.storyCharacters.length > 0
+      ? result.storyCharacters.map((c, idx) => sanitizeStoryCharacter(c, idx))
+      : createDefaultStoryCharacters();
+  const sanitizedStoryScenes =
+    Array.isArray(result.storyScenes) && result.storyScenes.length > 0
+      ? result.storyScenes.map((sc, idx) => sanitizeStoryScene(sc, idx))
+      : createDefaultStoryScenes();
+  const mergedStorySettings: StoryCinemaSettings = {
+    ...DEFAULT_STORY_CINEMA_SETTINGS,
+    ...(result.storySettings && typeof result.storySettings === 'object'
+      ? result.storySettings
+      : {}),
+  };
 
   return {
     ...base,
@@ -434,8 +617,16 @@ export function normalizeLoadedProject(
     id: typeof result.id === 'string' && result.id ? result.id : base.id,
     name: typeof result.name === 'string' && result.name ? result.name : base.name,
     schemaVersion: CURRENT_SCHEMA_VERSION,
+    studioMode: result.studioMode === 'storyStudio' ? 'storyStudio' : 'quiz',
     preferredAiVoice: result.preferredAiVoice ?? 'Kore',
     slides: sanitizedSlides,
+    storyTitle:
+      typeof result.storyTitle === 'string' && result.storyTitle.trim()
+        ? result.storyTitle
+        : base.storyTitle,
+    storyCharacters: sanitizedStoryChars,
+    storyScenes: sanitizedStoryScenes,
+    storySettings: mergedStorySettings,
     template: mergedTemplate,
     timing: mergedTiming,
     audio: {
@@ -471,7 +662,10 @@ function toSummary(project: QuizProject): ProjectSummary {
   return {
     id: project.id,
     name: project.name || 'مشروع بدون اسم',
-    slideCount: project.slides.length,
+    slideCount:
+      project.studioMode === 'storyStudio'
+        ? (project.storyScenes?.length ?? 1)
+        : project.slides.length,
     aspectRatio: project.template.aspectRatio === '16:9' ? '16:9' : '9:16',
     updatedAt: project.updatedAt || Date.now(),
   };

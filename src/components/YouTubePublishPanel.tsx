@@ -139,15 +139,39 @@ export const YouTubePublishPanel: React.FC<YouTubePublishPanelProps> = ({
   const [showWebUrlEdit, setShowWebUrlEdit] = useState(false);
   const [webLinkError, setWebLinkError] = useState('');
 
+  const isStoryStudio = project.studioMode === 'storyStudio';
+
   const handleGenerateKit = async () => {
     if (isGeneratingKit) return;
     setIsGeneratingKit(true);
     setKitError('');
     try {
+      const targetSlides = isStoryStudio
+        ? (project.storyScenes ?? []).map((sc, idx) => ({
+            id: sc.id || `story-kit-${idx}`,
+            slideType: 'story' as const,
+            badgeText: `مشهد ${idx + 1}`,
+            question: sc.title || `المشهد ${idx + 1}`,
+            options: [
+              sc.lines[0]?.text || '',
+              sc.lines[1]?.text || '',
+              sc.lines[2]?.text || '',
+              sc.lines[3]?.text || '',
+            ] as [string, string, string, string],
+            correctIndex: 0 as const,
+            explanationText: project.storySettings?.endMoralTitle || '',
+          }))
+        : project.slides;
+
       const generated = await generateYoutubePublishKit(
-        project.slides,
+        targetSlides,
         project.template.aspectRatio,
-        project.template.showIntroHook ? project.template.introHookText : undefined
+        isStoryStudio
+          ? project.storyTitle || project.name
+          : project.template.showIntroHook
+            ? project.template.introHookText
+            : undefined,
+        isStoryStudio ? 'story' : 'quiz'
       );
       const hashtagsLine = generated.hashtags.join(' ');
       const fullDescription =

@@ -57,7 +57,14 @@ export type BackgroundMotion = 'none' | 'slowZoom' | 'particles' | 'zoomAndParti
 
 export type PrizeLadderStyle = 'topStrip' | 'sideColumn';
 
-export type SlideType = 'multiple' | 'trueFalse' | 'clues' | 'versus';
+export type SlideType =
+  | 'multiple'
+  | 'trueFalse'
+  | 'clues'
+  | 'versus'
+  | 'order'
+  | 'fillBlank'
+  | 'story';
 export type SlideDifficulty = 'none' | 'easy' | 'medium' | 'hard';
 
 export type QuizCategory =
@@ -149,7 +156,14 @@ export type QuestionTextAlign = 'center' | 'right' | 'left';
 export type ThemeApplyMode = 'bgOnly' | 'full';
 export type TimerUnitSuffix = '' | 's' | 'ث';
 
-export type ImageChallengeMode = 'normal' | 'blurToClear' | 'gradualClear';
+export type ImageChallengeMode = 'normal' | 'blurToClear' | 'gradualClear' | 'pixelate';
+
+export type AnimatedMotionBg =
+  | 'none'
+  | 'neonGrid'
+  | 'auroraWave'
+  | 'starfieldWarp'
+  | 'stadiumLights';
 
 export type SlideTransitionStyle =
   | 'none'
@@ -175,6 +189,10 @@ export type PresetId =
   | 'ramadanLantern'
   | 'crimsonArena'
   | 'mintEditorial'
+  | 'gamingRgb'
+  | 'cinemaGold'
+  | 'podcastModern'
+  | 'sportPulse'
   | 'emerald'
   | 'navy'
   | 'obsidian';
@@ -380,6 +398,9 @@ export interface TemplateSettings {
   optionsAppearMode?: OptionsAppearMode;
   optionTextAlign?: OptionTextAlign;
   optionsRtlColumns?: boolean;
+  animatedMotionBg?: AnimatedMotionBg;
+  showAutoCaptions?: boolean;
+  ctaOverlayText?: string;
 }
 
 export interface TimingSettings {
@@ -396,12 +417,73 @@ export interface TimingSettings {
   transitionGap: number; // seconds between slides
 }
 
+export type StudioMode = 'quiz' | 'storyStudio';
+
+export type StoryCameraMotion = 'zoomIn' | 'zoomOut' | 'panLeft' | 'panRight' | 'breathing';
+export type StoryAtmosphere = 'none' | 'goldenDust' | 'starlight' | 'lanternGlow' | 'rain';
+export type StoryCharacterPosition = 'right' | 'left' | 'center';
+export type StoryCharacterExpression = 'calm' | 'happy' | 'serious' | 'surprised';
+export type StoryDialogueStyle = 'cinematicBar' | 'speechBubble' | 'subtitleMinimal';
+export type StoryPortraitFrameStyle = 'arch' | 'portraitCard' | 'circle' | 'roundedCine';
+
+export interface StoryCharacterProfile {
+  id: string;
+  name: string;
+  roleTitle: string;
+  avatarUrl: string;
+  voiceName: 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
+  accentColor: string;
+}
+
+export interface StoryDialogueLine {
+  id: string;
+  speakerId: string; // character profile id or 'narrator'
+  position: StoryCharacterPosition;
+  expression: StoryCharacterExpression;
+  text: string;
+  durationSec?: number;
+  voiceClip?: SlideAudioClip;
+}
+
+export interface StoryScene {
+  id: string;
+  title: string;
+  locationId: string;
+  customLocationUrl?: string;
+  customLocationName?: string;
+  cameraMotion: StoryCameraMotion;
+  atmosphere: StoryAtmosphere;
+  sceneBannerText?: string;
+  characterIds: string[]; // up to 3 visible characters in the scene
+  lines: StoryDialogueLine[];
+  transition?: SlideTransitionStyle;
+}
+
+export interface StoryCinemaSettings {
+  dialogueStyle: StoryDialogueStyle;
+  showSceneHeader: boolean;
+  showCastNames: boolean;
+  showWaveform: boolean;
+  dimInactiveSpeakers: boolean;
+  portraitFrameStyle: StoryPortraitFrameStyle;
+  endMoralTitle: string;
+  endMoralSubtitle: string;
+  endCardDuration: number;
+  sceneTitleHold: number;
+  lineGap: number;
+}
+
 export interface QuizProject {
   id: string;
   name: string;
   schemaVersion?: number;
+  studioMode?: StudioMode;
   preferredAiVoice?: 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
   slides: QuestionSlide[];
+  storyTitle?: string;
+  storyCharacters?: StoryCharacterProfile[];
+  storyScenes?: StoryScene[];
+  storySettings?: StoryCinemaSettings;
   template: TemplateSettings;
   timing: TimingSettings;
   audio: AudioSettings;
@@ -545,6 +627,38 @@ export const PRESET_BACKDROPS: PresetBackdropInfo[] = [
     swatchColor: '#d2efe0',
   },
   {
+    id: 'gamingRgb',
+    label: 'جيمنج نيون RGB 🎮',
+    gradientInner: '#2e1065',
+    gradientOuter: '#060714',
+    gradientStop: 0.74,
+    swatchColor: '#7c3aed',
+  },
+  {
+    id: 'cinemaGold',
+    label: 'سينما ذهبي 🎬',
+    gradientInner: '#2b200c',
+    gradientOuter: '#070605',
+    gradientStop: 0.75,
+    swatchColor: '#ca8a04',
+  },
+  {
+    id: 'podcastModern',
+    label: 'بودكاست عصري 🎙️',
+    gradientInner: '#1e293b',
+    gradientOuter: '#090d16',
+    gradientStop: 0.76,
+    swatchColor: '#38bdf8',
+  },
+  {
+    id: 'sportPulse',
+    label: 'نبض الملاعب ⚽',
+    gradientInner: '#064e3b',
+    gradientOuter: '#03120e',
+    gradientStop: 0.74,
+    swatchColor: '#10b981',
+  },
+  {
     id: 'emerald',
     label: 'الزمرد الذهبي',
     src: withBasePath('src/assets/images/template_emerald_studio_1795289851480.jpg'),
@@ -636,6 +750,10 @@ export const STUDIO_THEME_ORDER: PresetId[] = [
   'ramadanLantern',
   'crimsonArena',
   'mintEditorial',
+  'gamingRgb',
+  'cinemaGold',
+  'podcastModern',
+  'sportPulse',
 ];
 
 export function getCanvasDimensions(template?: Pick<TemplateSettings, 'aspectRatio'>): {
@@ -1204,6 +1322,154 @@ function applyStudioThemePresetInternal(
     };
   }
 
+  if (presetId === 'gamingRgb') {
+    return {
+      ...current,
+      backgroundType: 'preset',
+      presetId: 'gamingRgb',
+      fontFamily: 'Cairo',
+      boxStyle: 'neon',
+      borderStyle: 'gradientNeon',
+      shadowIntensity: 1.25,
+      glowIntensity: 0.72,
+      boxGloss: false,
+      enhanceAppearance: true,
+      animatedMotionBg: 'neonGrid',
+      questionTextColor: '#f8fafc',
+      questionBoxColor: '#0f172a',
+      questionBoxOpacity: 0.94,
+      questionBorderColor: '#a855f7',
+      questionBorderWidth: 4,
+      questionBorderRadius: 26,
+      optionTextColor: '#f8fafc',
+      optionBoxColor: '#111827',
+      optionBoxOpacity: 0.92,
+      optionBorderColor: '#22d3ee',
+      optionBorderWidth: 3,
+      optionBorderRadius: 22,
+      optionLabelBgColor: '#9333ea',
+      optionLabelTextColor: '#ffffff',
+      correctColor: '#10b981',
+      wrongColor: '#f43f5e',
+      revealStyle: 'dimOthers',
+      timerMatchBackground: true,
+      timerBgColor: '#3b0764',
+      timerColor: '#ffffff',
+      showPrizeLadder: false,
+    };
+  }
+
+  if (presetId === 'cinemaGold') {
+    return {
+      ...current,
+      backgroundType: 'preset',
+      presetId: 'cinemaGold',
+      fontFamily: 'Tajawal',
+      boxStyle: 'bevel3d',
+      borderStyle: 'gradientGold',
+      shadowIntensity: 1.3,
+      glowIntensity: 0.28,
+      boxGloss: true,
+      enhanceAppearance: true,
+      animatedMotionBg: 'starfieldWarp',
+      questionTextColor: '#fef3c7',
+      questionBoxColor: '#17120b',
+      questionBoxOpacity: 0.95,
+      questionBorderColor: '#f59e0b',
+      questionBorderWidth: 4,
+      questionBorderRadius: 24,
+      optionTextColor: '#fffbeb',
+      optionBoxColor: '#1f180e',
+      optionBoxOpacity: 0.94,
+      optionBorderColor: '#d97706',
+      optionBorderWidth: 3,
+      optionBorderRadius: 20,
+      optionLabelBgColor: '#f59e0b',
+      optionLabelTextColor: '#111827',
+      correctColor: '#22c55e',
+      wrongColor: '#ef4444',
+      revealStyle: 'dimOthers',
+      timerMatchBackground: true,
+      timerBgColor: '#78350f',
+      timerColor: '#fef3c7',
+      showPrizeLadder: false,
+    };
+  }
+
+  if (presetId === 'podcastModern') {
+    return {
+      ...current,
+      backgroundType: 'preset',
+      presetId: 'podcastModern',
+      fontFamily: 'Cairo',
+      boxStyle: 'glass',
+      borderStyle: 'solid',
+      shadowIntensity: 1.1,
+      glowIntensity: 0.25,
+      boxGloss: false,
+      enhanceAppearance: true,
+      animatedMotionBg: 'auroraWave',
+      questionTextColor: '#f8fafc',
+      questionBoxColor: '#0f172a',
+      questionBoxOpacity: 0.88,
+      questionBorderColor: '#38bdf8',
+      questionBorderWidth: 3,
+      questionBorderRadius: 28,
+      optionTextColor: '#f1f5f9',
+      optionBoxColor: '#1e293b',
+      optionBoxOpacity: 0.86,
+      optionBorderColor: '#64748b',
+      optionBorderWidth: 3,
+      optionBorderRadius: 22,
+      optionLabelBgColor: '#0ea5e9',
+      optionLabelTextColor: '#ffffff',
+      correctColor: '#10b981',
+      wrongColor: '#f43f5e',
+      revealStyle: 'dimOthers',
+      timerMatchBackground: true,
+      timerBgColor: '#0369a1',
+      timerColor: '#ffffff',
+      showPrizeLadder: false,
+    };
+  }
+
+  if (presetId === 'sportPulse') {
+    return {
+      ...current,
+      backgroundType: 'preset',
+      presetId: 'sportPulse',
+      fontFamily: 'Cairo',
+      boxStyle: 'bevel3d',
+      borderStyle: 'solid',
+      shadowIntensity: 1.25,
+      glowIntensity: 0.35,
+      boxGloss: true,
+      enhanceAppearance: true,
+      animatedMotionBg: 'stadiumLights',
+      questionTextColor: '#ffffff',
+      questionBoxColor: '#052e23',
+      questionBoxOpacity: 0.94,
+      questionBorderColor: '#34d399',
+      questionBorderWidth: 5,
+      questionBorderRadius: 28,
+      optionTextColor: '#ecfdf5',
+      optionBoxColor: '#064e3b',
+      optionBoxOpacity: 0.92,
+      optionBorderColor: '#10b981',
+      optionBorderWidth: 4,
+      optionBorderRadius: 22,
+      optionLabelBgColor: '#fbbf24',
+      optionLabelTextColor: '#052e23',
+      correctColor: '#22c55e',
+      wrongColor: '#ef4444',
+      revealStyle: 'dimOthers',
+      timerMatchBackground: true,
+      timerBgColor: '#047857',
+      timerColor: '#ffffff',
+      showPrizeLadder: false,
+    };
+  }
+
   const preset = PRESET_BACKDROPS.find((p) => p.id === presetId);
   return {
     ...current,
@@ -1350,6 +1616,9 @@ export const DEFAULT_TEMPLATE: TemplateSettings = {
   optionsAppearMode: 'stagger',
   optionTextAlign: 'auto',
   optionsRtlColumns: true,
+  animatedMotionBg: 'none',
+  showAutoCaptions: false,
+  ctaOverlayText: '',
 };
 
 export const DEFAULT_TIMING: TimingSettings = {
@@ -1508,12 +1777,26 @@ export function computeSlideSchedule(
   const globalOptDur =
     optSlot?.sourceType === 'custom' && optSlot.customDataUrl ? optSlot.duration ?? 0 : 0;
 
+  const isStorySlide = slide?.slideType === 'story';
+  const storyActiveCount = isStorySlide
+    ? Math.max(
+        1,
+        Math.min(
+          4,
+          (slide?.options || []).filter((o) => typeof o === 'string' && o.trim().length > 0)
+            .length || 3
+        )
+      )
+    : 4;
+
   const optionCount =
     slide?.slideType === 'trueFalse' || slide?.slideType === 'versus'
       ? 2
       : slide?.slideType === 'clues'
         ? 3
-        : 4;
+        : isStorySlide
+          ? storyActiveCount
+          : 4;
   const appearMode = template?.optionsAppearMode || 'stagger';
   const defaultStagger = Math.max(0.15, timing?.optionStaggerDelay ?? 0.45);
   const tOptions: number[] = [tOpt0];
@@ -1525,7 +1808,7 @@ export function computeSlideSchedule(
     return auto && optDur > 0 ? Math.max(0.25, optDur + gap) : defaultStagger;
   };
 
-  if (appearMode === 'allAtOnce') {
+  if (appearMode === 'allAtOnce' && !isStorySlide) {
     let maxStep = defaultStagger;
     for (let i = 0; i < optionCount; i++) {
       tOptions[i] = tOpt0;
@@ -1533,7 +1816,7 @@ export function computeSlideSchedule(
       if (s > maxStep) maxStep = s;
     }
     lastOptDuration = maxStep;
-  } else if (appearMode === 'rowByRow' && optionCount === 4) {
+  } else if (appearMode === 'rowByRow' && optionCount === 4 && !isStorySlide) {
     const row0Step = Math.max(getOptStep(0), getOptStep(1));
     const row1Step = Math.max(getOptStep(2), getOptStep(3));
     tOptions[0] = tOpt0;
@@ -1556,7 +1839,7 @@ export function computeSlideSchedule(
     tOptions.push(tOptions[tOptions.length - 1]);
   }
 
-  const thinkingDur = Math.max(0, timing?.thinkingDuration ?? 5);
+  const thinkingDur = isStorySlide ? 0 : Math.max(0, timing?.thinkingDuration ?? 5);
   const tThinkingStart = tOptions[optionCount - 1] + lastOptDuration;
   const tTimerExitStart = tThinkingStart + thinkingDur;
   const tSuspenseStart = tTimerExitStart;
@@ -1564,9 +1847,9 @@ export function computeSlideSchedule(
   const susSlot = audio?.suspense;
   const customSusDur =
     susSlot?.sourceType === 'custom' && susSlot.customDataUrl ? susSlot.duration ?? 0 : 0;
-  const configuredSus = Math.max(0, timing?.suspenseDuration ?? 1.6);
+  const configuredSus = isStorySlide ? 0 : Math.max(0, timing?.suspenseDuration ?? 1.6);
   const suspenseDur =
-    auto && customSusDur > 0 && configuredSus > 0
+    !isStorySlide && auto && customSusDur > 0 && configuredSus > 0
       ? Math.max(configuredSus, customSusDur + 0.05)
       : configuredSus;
 
@@ -1652,3 +1935,132 @@ export function getTotalDuration(
   if (contentDur <= 0) return 0;
   return contentDur + (template?.showEndCard ? END_CARD_DURATION : 0);
 }
+
+export interface StoryLineSchedule {
+  lineIndex: number;
+  speakerId: string;
+  startTime: number;
+  endTime: number;
+  duration: number;
+}
+
+export interface StorySceneSchedule {
+  sceneIndex: number;
+  startTime: number;
+  endTime: number;
+  duration: number;
+  titleHold: number;
+  lines: StoryLineSchedule[];
+}
+
+export function estimateArabicReadingSec(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(2.3, Math.min(8.5, 1.15 + words * 0.36));
+}
+
+export function computeStoryLineDuration(
+  line: StoryDialogueLine,
+  timing?: Pick<TimingSettings, 'autoSyncWithAudio' | 'audioEndGap'>,
+  storySettings?: Partial<StoryCinemaSettings>
+): number {
+  const auto = timing?.autoSyncWithAudio ?? true;
+  const gap = Math.max(0.05, storySettings?.lineGap ?? timing?.audioEndGap ?? 0.2);
+  const clipDur = line.voiceClip?.dataUrl ? line.voiceClip.duration ?? 0 : 0;
+  if (auto && clipDur > 0.1) {
+    return Math.max(0.7, clipDur + gap);
+  }
+  const explicit = Number(line.durationSec);
+  if (Number.isFinite(explicit) && explicit >= 0.8) {
+    return explicit;
+  }
+  return estimateArabicReadingSec(line.text || '');
+}
+
+export function computeStoryTimeline(
+  scenes: StoryScene[] | undefined,
+  timing: TimingSettings,
+  storySettings?: Partial<StoryCinemaSettings>,
+  template?: TemplateSettings
+): StorySceneSchedule[] {
+  const list = Array.isArray(scenes) ? scenes : [];
+  const schedules: StorySceneSchedule[] = [];
+  let cursor = getIntroHookDuration(template, timing);
+  const sceneGap = Math.max(0, timing?.transitionGap ?? 0.35);
+  const titleHold = Math.max(0, Math.min(2.0, storySettings?.sceneTitleHold ?? 0.35));
+
+  for (let sIdx = 0; sIdx < list.length; sIdx++) {
+    const scene = list[sIdx];
+    const sceneStart = cursor;
+    const lineSchedules: StoryLineSchedule[] = [];
+    let lineCursor = sceneStart + titleHold;
+    const lines = Array.isArray(scene.lines) ? scene.lines : [];
+
+    for (let lIdx = 0; lIdx < lines.length; lIdx++) {
+      const line = lines[lIdx];
+      const dur = computeStoryLineDuration(line, timing, storySettings);
+      lineSchedules.push({
+        lineIndex: lIdx,
+        speakerId: line.speakerId || 'wise_narrator',
+        startTime: lineCursor,
+        endTime: lineCursor + dur,
+        duration: dur,
+      });
+      lineCursor += dur;
+    }
+
+    if (lineSchedules.length === 0) {
+      lineCursor += 2.5;
+    }
+
+    const sceneEnd = lineCursor + 0.15;
+    schedules.push({
+      sceneIndex: sIdx,
+      startTime: sceneStart,
+      endTime: sceneEnd,
+      duration: sceneEnd - sceneStart,
+      titleHold,
+      lines: lineSchedules,
+    });
+    cursor = sceneEnd + (sIdx < list.length - 1 ? sceneGap : 0);
+  }
+
+  return schedules;
+}
+
+export function getStoryContentDuration(
+  scenes: StoryScene[] | undefined,
+  timing: TimingSettings,
+  storySettings?: Partial<StoryCinemaSettings>,
+  template?: TemplateSettings
+): number {
+  const schedules = computeStoryTimeline(scenes, timing, storySettings, template);
+  if (schedules.length === 0) return 0;
+  return schedules[schedules.length - 1].endTime;
+}
+
+export function getStoryTotalDuration(
+  scenes: StoryScene[] | undefined,
+  timing: TimingSettings,
+  storySettings?: Partial<StoryCinemaSettings>,
+  template?: TemplateSettings
+): number {
+  const contentDur = getStoryContentDuration(scenes, timing, storySettings, template);
+  if (contentDur <= 0) return 0;
+  const endDur = template?.showEndCard
+    ? Math.max(1.2, Math.min(5.0, storySettings?.endCardDuration ?? 2.2))
+    : 0;
+  return contentDur + endDur;
+}
+
+export function getProjectTotalDuration(project: QuizProject): number {
+  if (project.studioMode === 'storyStudio') {
+    return getStoryTotalDuration(
+      project.storyScenes,
+      project.timing,
+      project.storySettings,
+      project.template
+    );
+  }
+  return getTotalDuration(project.slides, project.timing, project.audio, project.template);
+}
+

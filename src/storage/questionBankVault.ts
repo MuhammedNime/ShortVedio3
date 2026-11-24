@@ -848,7 +848,10 @@ export function parseManualBulkQuestionsText(
         const st = (
           obj.slideType === 'trueFalse' ||
           obj.slideType === 'clues' ||
-          obj.slideType === 'versus'
+          obj.slideType === 'versus' ||
+          obj.slideType === 'order' ||
+          obj.slideType === 'fillBlank' ||
+          obj.slideType === 'story'
             ? obj.slideType
             : defaultSlideType
         ) as SlideType;

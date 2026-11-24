@@ -118,12 +118,25 @@ export function collectSoundEventsInInterval(
     const tThink = base + sched.tThinkingStart;
     const tSus = base + sched.tSuspenseStart;
     const tReveal = base + sched.tRevealStart;
+    const isStory = slide?.slideType === 'story';
+    const storyCount = isStory
+      ? Math.max(
+          1,
+          Math.min(
+            4,
+            (slide?.options || []).filter((o) => typeof o === 'string' && o.trim().length > 0)
+              .length || 3
+          )
+        )
+      : 4;
     const optCount =
       slide?.slideType === 'trueFalse' || slide?.slideType === 'versus'
         ? 2
         : slide?.slideType === 'clues'
           ? 3
-          : 4;
+          : isStory
+            ? storyCount
+            : 4;
     const hasAnyOptVoice = Array.from({ length: optCount }).some((_, oi) =>
       Boolean(slide?.voiceover?.options?.[oi]?.dataUrl)
     );
@@ -181,31 +194,33 @@ export function collectSoundEventsInInterval(
       }
     }
 
-    const totalTicks = Math.floor(timing.thinkingDuration);
-    const urgentThreshold = Math.max(1, Math.min(10, template?.timerUrgentThreshold ?? 3));
-    for (let sec = 0; sec < totalTicks; sec++) {
-      const tTick = tThink + sec;
-      const tickSecond = totalTicks - sec;
-      if (prevTime < tTick && currTime >= tTick) {
+    if (!isStory) {
+      const totalTicks = Math.floor(timing.thinkingDuration);
+      const urgentThreshold = Math.max(1, Math.min(10, template?.timerUrgentThreshold ?? 3));
+      for (let sec = 0; sec < totalTicks; sec++) {
+        const tTick = tThink + sec;
+        const tickSecond = totalTicks - sec;
+        if (prevTime < tTick && currTime >= tTick) {
+          events.push({
+            type: 'countdownTick',
+            slideIndex: sIdx,
+            tickSecond,
+            urgent: tickSecond <= urgentThreshold,
+            maxDuration: Math.max(0.08, Math.min(0.88, tSus - tTick - 0.02)),
+          });
+        }
+      }
+
+      if ((timing.suspenseDuration ?? 0) > 0 && prevTime < tSus && currTime >= tSus) {
         events.push({
-          type: 'countdownTick',
+          type: 'suspense',
           slideIndex: sIdx,
-          tickSecond,
-          urgent: tickSecond <= urgentThreshold,
-          maxDuration: Math.max(0.08, Math.min(0.88, tSus - tTick - 0.02)),
+          maxDuration: Math.max(0.15, tReveal - tSus - 0.02),
         });
       }
     }
 
-    if ((timing.suspenseDuration ?? 0) > 0 && prevTime < tSus && currTime >= tSus) {
-      events.push({
-        type: 'suspense',
-        slideIndex: sIdx,
-        maxDuration: Math.max(0.15, tReveal - tSus - 0.02),
-      });
-    }
-
-    if (prevTime < tReveal && currTime >= tReveal) {
+    if ((!isStory || Boolean(slide?.voiceover?.answer?.dataUrl)) && prevTime < tReveal && currTime >= tReveal) {
       events.push({
         type: 'correctReveal',
         slideIndex: sIdx,
@@ -915,49 +930,72 @@ function drawBlurredChallengeImage(
   h: number,
   blurStrength: number,
   mysteryAlpha: number,
-  fontStack: string
+  fontStack: string,
+  isPixelate = false
 ): void {
   if (blurStrength <= 0.8 || typeof document === 'undefined') {
     ctx.drawImage(img, x, y, w, h);
     return;
   }
 
-  // Deterministic 2-stage bilinear downscale/upscale blur (artifact-free across all mobile WebViews & exports)
+  // Deterministic 2-stage bilinear downscale/upscale blur or crisp nearest-neighbor pixelate mosaic
   if (!blurPassCanvasA) blurPassCanvasA = document.createElement('canvas');
   if (!blurPassCanvasB) blurPassCanvasB = document.createElement('canvas');
 
-  const div = Math.max(2, blurStrength * 0.72);
-  const smallW = Math.max(5, Math.round(w / div));
-  const smallH = Math.max(5, Math.round(h / div));
-  const midW = Math.max(smallW * 2, Math.round(w / Math.max(2, div * 0.45)));
-  const midH = Math.max(smallH * 2, Math.round(h / Math.max(2, div * 0.45)));
+  if (isPixelate) {
+    const pixelDiv = Math.max(4, blurStrength * 1.15);
+    const smallW = Math.max(6, Math.round(w / pixelDiv));
+    const smallH = Math.max(6, Math.round(h / pixelDiv));
+    blurPassCanvasB.width = smallW;
+    blurPassCanvasB.height = smallH;
+    const ctxB = blurPassCanvasB.getContext('2d');
+    if (ctxB) {
+      ctxB.imageSmoothingEnabled = true;
+      ctxB.imageSmoothingQuality = 'low';
+      ctxB.clearRect(0, 0, smallW, smallH);
+      ctxB.drawImage(img, 0, 0, smallW, smallH);
 
-  blurPassCanvasA.width = midW;
-  blurPassCanvasA.height = midH;
-  const ctxA = blurPassCanvasA.getContext('2d');
-  if (ctxA) {
-    ctxA.imageSmoothingEnabled = true;
-    ctxA.imageSmoothingQuality = 'high';
-    ctxA.clearRect(0, 0, midW, midH);
-    ctxA.drawImage(img, 0, 0, midW, midH);
-  }
-
-  blurPassCanvasB.width = smallW;
-  blurPassCanvasB.height = smallH;
-  const ctxB = blurPassCanvasB.getContext('2d');
-  if (ctxB && ctxA) {
-    ctxB.imageSmoothingEnabled = true;
-    ctxB.imageSmoothingQuality = 'high';
-    ctxB.clearRect(0, 0, smallW, smallH);
-    ctxB.drawImage(blurPassCanvasA, 0, 0, smallW, smallH);
-
-    ctx.save();
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(blurPassCanvasB, x, y, w, h);
-    ctx.restore();
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(blurPassCanvasB, x, y, w, h);
+      ctx.restore();
+    } else {
+      ctx.drawImage(img, x, y, w, h);
+    }
   } else {
-    ctx.drawImage(img, x, y, w, h);
+    const div = Math.max(2, blurStrength * 0.72);
+    const smallW = Math.max(5, Math.round(w / div));
+    const smallH = Math.max(5, Math.round(h / div));
+    const midW = Math.max(smallW * 2, Math.round(w / Math.max(2, div * 0.45)));
+    const midH = Math.max(smallH * 2, Math.round(h / Math.max(2, div * 0.45)));
+
+    blurPassCanvasA.width = midW;
+    blurPassCanvasA.height = midH;
+    const ctxA = blurPassCanvasA.getContext('2d');
+    if (ctxA) {
+      ctxA.imageSmoothingEnabled = true;
+      ctxA.imageSmoothingQuality = 'high';
+      ctxA.clearRect(0, 0, midW, midH);
+      ctxA.drawImage(img, 0, 0, midW, midH);
+    }
+
+    blurPassCanvasB.width = smallW;
+    blurPassCanvasB.height = smallH;
+    const ctxB = blurPassCanvasB.getContext('2d');
+    if (ctxB && ctxA) {
+      ctxB.imageSmoothingEnabled = true;
+      ctxB.imageSmoothingQuality = 'high';
+      ctxB.clearRect(0, 0, smallW, smallH);
+      ctxB.drawImage(blurPassCanvasA, 0, 0, smallW, smallH);
+
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(blurPassCanvasB, x, y, w, h);
+      ctx.restore();
+    } else {
+      ctx.drawImage(img, x, y, w, h);
+    }
   }
 
   if (mysteryAlpha > 0.04) {
@@ -1230,7 +1268,140 @@ function drawProceduralPresetDecor(
       bctx.fill();
     }
     bctx.restore();
+  } else if (presetId === 'gamingRgb') {
+    bctx.save();
+    const g1 = bctx.createRadialGradient(W * 0.16, H * 0.2, 10, W * 0.16, H * 0.2, W * 0.48);
+    g1.addColorStop(0, 'rgba(168, 85, 247, 0.28)');
+    g1.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    bctx.fillStyle = g1;
+    bctx.fillRect(0, 0, W, H);
+    const g2 = bctx.createRadialGradient(W * 0.85, H * 0.82, 10, W * 0.85, H * 0.82, W * 0.48);
+    g2.addColorStop(0, 'rgba(34, 211, 238, 0.22)');
+    g2.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    bctx.fillStyle = g2;
+    bctx.fillRect(0, 0, W, H);
+    bctx.restore();
+  } else if (presetId === 'cinemaGold') {
+    bctx.save();
+    bctx.strokeStyle = 'rgba(245, 158, 11, 0.24)';
+    bctx.lineWidth = 3;
+    bctx.strokeRect(24, 24, W - 48, H - 48);
+    const cg = bctx.createRadialGradient(W * 0.5, H * 0.18, 20, W * 0.5, H * 0.18, W * 0.56);
+    cg.addColorStop(0, 'rgba(245, 158, 11, 0.2)');
+    cg.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    bctx.fillStyle = cg;
+    bctx.fillRect(0, 0, W, H);
+    bctx.restore();
+  } else if (presetId === 'podcastModern') {
+    bctx.save();
+    const pg = bctx.createRadialGradient(W * 0.82, H * 0.18, 20, W * 0.82, H * 0.18, W * 0.45);
+    pg.addColorStop(0, 'rgba(56, 189, 248, 0.22)');
+    pg.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    bctx.fillStyle = pg;
+    bctx.fillRect(0, 0, W, H);
+    bctx.restore();
+  } else if (presetId === 'sportPulse') {
+    bctx.save();
+    bctx.strokeStyle = 'rgba(52, 211, 153, 0.12)';
+    bctx.lineWidth = 3;
+    bctx.beginPath();
+    bctx.arc(W * 0.5, H * 0.5, W * 0.28, 0, Math.PI * 2);
+    bctx.stroke();
+    bctx.beginPath();
+    bctx.moveTo(0, H * 0.5);
+    bctx.lineTo(W, H * 0.5);
+    bctx.stroke();
+    bctx.restore();
   }
+}
+
+function drawAnimatedMotionBackdrop(
+  ctx: CanvasRenderingContext2D,
+  template: TemplateSettings,
+  globalTime: number,
+  W: number,
+  H: number
+): void {
+  const mode = template.animatedMotionBg || 'none';
+  if (mode === 'none') return;
+
+  ctx.save();
+  if (mode === 'neonGrid') {
+    const horizonY = H * 0.52;
+    ctx.strokeStyle = 'rgba(168, 85, 247, 0.22)';
+    ctx.lineWidth = 2;
+    const rays = 12;
+    for (let i = -rays; i <= rays; i++) {
+      ctx.beginPath();
+      ctx.moveTo(W / 2 + i * 28, horizonY);
+      ctx.lineTo(W / 2 + i * 210, H);
+      ctx.stroke();
+    }
+    const speed = (globalTime * 0.85) % 1;
+    for (let r = 0; r < 10; r++) {
+      const p = (r + speed) / 10;
+      const y = horizonY + Math.pow(p, 1.85) * (H - horizonY);
+      ctx.strokeStyle = `rgba(34, 211, 238, ${(0.08 + p * 0.24).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+      ctx.stroke();
+    }
+  } else if (mode === 'auroraWave') {
+    for (let band = 0; band < 2; band++) {
+      const baseY = H * (0.24 + band * 0.34);
+      const grad = ctx.createLinearGradient(0, baseY - 120, W, baseY + 120);
+      grad.addColorStop(0, band === 0 ? 'rgba(56, 189, 248, 0)' : 'rgba(16, 185, 129, 0)');
+      grad.addColorStop(0.5, band === 0 ? 'rgba(56, 189, 248, 0.16)' : 'rgba(168, 85, 247, 0.14)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(0, baseY + 140);
+      for (let x = 0; x <= W; x += 60) {
+        const y =
+          baseY +
+          Math.sin(x * 0.005 + globalTime * (0.9 + band * 0.3) + band * 2.1) * 58 +
+          Math.cos(x * 0.003 - globalTime * 0.5) * 24;
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(W, baseY + 180);
+      ctx.closePath();
+      ctx.fill();
+    }
+  } else if (mode === 'starfieldWarp') {
+    const cx = W * 0.5;
+    const cy = H * 0.42;
+    const maxR = Math.hypot(W, H) * 0.58;
+    for (let i = 0; i < 42; i++) {
+      const angle = ((i * 137.508) % 360) * (Math.PI / 180);
+      const prog = ((globalTime * (0.22 + (i % 5) * 0.05) + i * 0.17) % 1);
+      const r0 = prog * maxR;
+      const r1 = Math.min(maxR, r0 + 18 + prog * 36);
+      ctx.strokeStyle = `rgba(253, 230, 138, ${(0.12 + prog * 0.42).toFixed(3)})`;
+      ctx.lineWidth = 1.5 + prog * 2.2;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(angle) * r0, cy + Math.sin(angle) * r0);
+      ctx.lineTo(cx + Math.cos(angle) * r1, cy + Math.sin(angle) * r1);
+      ctx.stroke();
+    }
+  } else if (mode === 'stadiumLights') {
+    const sources = [W * 0.15, W * 0.5, W * 0.85];
+    sources.forEach((sx, idx) => {
+      const sway = Math.sin(globalTime * 0.8 + idx * 1.9) * (W * 0.18);
+      const grad = ctx.createLinearGradient(sx, 0, W * 0.5 + sway, H * 0.82);
+      grad.addColorStop(0, idx === 1 ? 'rgba(52, 211, 153, 0.18)' : 'rgba(255, 255, 255, 0.14)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(sx - 55, 0);
+      ctx.lineTo(sx + 55, 0);
+      ctx.lineTo(W * 0.5 + sway + W * 0.24, H * 0.88);
+      ctx.lineTo(W * 0.5 + sway - W * 0.24, H * 0.88);
+      ctx.closePath();
+      ctx.fill();
+    });
+  }
+  ctx.restore();
 }
 
 function drawCachedBackdrop(
@@ -1328,6 +1499,8 @@ function drawCachedBackdrop(
     } else {
       ctx.drawImage(bgCacheCanvas, 0, 0);
     }
+
+    drawAnimatedMotionBackdrop(ctx, template, globalTime, W, H);
 
     if (motion === 'particles' || motion === 'zoomAndParticles') {
       drawAmbientParticles(ctx, template, globalTime, W, H);
@@ -1970,6 +2143,8 @@ export function computeStageLayerLayout(
   const isTrueFalse = slide.slideType === 'trueFalse';
   const isVersus = slide.slideType === 'versus';
   const isClues = slide.slideType === 'clues';
+  const isOrder = slide.slideType === 'order';
+  const isStory = slide.slideType === 'story';
   const isTwoOptionSideBySide = isTrueFalse || isVersus;
   const boxStyle: BoxShapeStyle = template.boxStyle || 'flat';
   const borderStyle: BoxBorderStyle = template.borderStyle || 'solid';
@@ -2243,10 +2418,41 @@ export function computeStageLayerLayout(
   let resolvedQCenterY = isFreeLayout ? desiredQCenterY : Math.max(minQCenterY, desiredQCenterY);
 
   // === Layer 5 & 6: Options + Timer + Explanation Sizing ===
-  const optionCount = isTwoOptionSideBySide ? 2 : isClues ? 3 : 4;
+  const storyActiveCount = isStory
+    ? Math.max(
+        1,
+        Math.min(
+          4,
+          (slide.options || []).filter((o) => typeof o === 'string' && o.trim().length > 0).length ||
+            3
+        )
+      )
+    : 4;
+  const optionCount = isTwoOptionSideBySide
+    ? 2
+    : isClues
+      ? 3
+      : isStory
+        ? storyActiveCount
+        : 4;
   const is2x2Layout =
-    !isClues && (template.optionsLayout === 'channel2x2' || template.optionsLayout === 'grid2x2');
-  const rowsCount = isClues ? 3 : !is2x2Layout ? (isTwoOptionSideBySide ? 2 : 4) : isTwoOptionSideBySide ? 1 : 2;
+    !isClues &&
+    !isOrder &&
+    !isStory &&
+    (template.optionsLayout === 'channel2x2' || template.optionsLayout === 'grid2x2');
+  const rowsCount = isStory
+    ? optionCount
+    : isOrder
+      ? 4
+      : isClues
+        ? 3
+        : !is2x2Layout
+          ? isTwoOptionSideBySide
+            ? 2
+            : 4
+          : isTwoOptionSideBySide
+            ? 1
+            : 2;
   const userOptAreaW = (Math.max(35, Math.min(100, template.optionsWidth ?? 94)) / 100) * W;
   const maxStageOptW = isWide && !isFreeLayout ? wideAvailW : W - 24 - optSide * 2;
   let totalOptionsW = isWide && !isFreeLayout ? Math.min(wideAvailW, userOptAreaW) : Math.min(maxStageOptW, userOptAreaW);
@@ -2256,8 +2462,8 @@ export function computeStageLayerLayout(
       ? !is2x2Layout
         ? Math.min(112, Math.max(72, Math.round(template.optionHeight * 0.72)))
         : Math.min(156, Math.max(92, template.optionHeight))
-      : isClues && !isWide
-        ? Math.min(136, Math.max(108, template.optionHeight))
+      : (isClues || isOrder || isStory) && !isWide
+        ? Math.min(136, Math.max(104, template.optionHeight))
         : template.optionHeight;
   let effectiveOptH =
     isTwoOptionSideBySide && is2x2Layout && !isFreeLayout
@@ -2277,7 +2483,7 @@ export function computeStageLayerLayout(
       : userGap
     : Math.max(minVisualColGap, customColGap > 0 ? customColGap : Math.max(14, userGap));
 
-  const hasTimerEnabled = template.timerStyle !== 'none' && timing.thinkingDuration > 0;
+  const hasTimerEnabled = !isStory && template.timerStyle !== 'none' && timing.thinkingDuration > 0;
   const timerPlacement: TimerPlacement = template.timerPlacement || 'aboveOptions';
   let extraQGap = Math.max(0, Math.min(240, template.questionToOptionsGap ?? 0));
   const extraCenterSpread = Math.max(0, Math.min(200, template.optionsCenterGap ?? 24));
@@ -2350,7 +2556,7 @@ export function computeStageLayerLayout(
 
   // Measure Explanation Note
   const expTextTrimmed = (slide.explanationText || '').trim();
-  const hasExplanation = Boolean(template.showExplanationOnReveal && expTextTrimmed);
+  const hasExplanation = Boolean((template.showExplanationOnReveal || isStory) && expTextTrimmed);
   let expBoxW = Math.min(W - 120, Math.max(720, (template.optionsWidth / 100) * W));
   let expFontSize = 30;
   let expBoxH = 0;
@@ -2390,6 +2596,9 @@ export function computeStageLayerLayout(
       : Math.max(20, optTop + 14)) + extraQGap;
 
   let bottomMargin = isWide ? 24 : 88;
+  if (template.showAutoCaptions || (template.ctaOverlayText || '').trim()) {
+    bottomMargin = Math.max(bottomMargin, isWide ? 82 : 128);
+  }
   if (brandRect && hasBottomCornerBrand && !isFreeLayout) {
     const widestBottomSpan = Math.max(totalOptionsW, hasExplanation ? expBoxW : 0);
     const leftEdge = W / 2 - widestBottomSpan / 2;
@@ -3161,6 +3370,9 @@ export function renderQuizFrame(
   const isTrueFalse = slide.slideType === 'trueFalse';
   const isVersus = slide.slideType === 'versus';
   const isClues = slide.slideType === 'clues';
+  const isOrder = slide.slideType === 'order';
+  const isFillBlank = slide.slideType === 'fillBlank';
+  const isStory = slide.slideType === 'story';
   const isTwoOptionSideBySide = isTrueFalse || isVersus;
   const enhanced = template.enhanceAppearance ?? true;
   const slideImg = getCachedImage(slide.imageDataUrl);
@@ -3389,7 +3601,7 @@ export function renderQuizFrame(
       let activeBlur = 0;
       let mysteryAlpha = 0;
 
-      if (imgMode === 'blurToClear') {
+      if (imgMode === 'blurToClear' || imgMode === 'pixelate') {
         if (!isRevealed) {
           activeBlur = maxBlur;
           mysteryAlpha = 1;
@@ -3423,7 +3635,8 @@ export function renderQuizFrame(
         imgFrameH,
         activeBlur,
         mysteryAlpha,
-        fontStack
+        fontStack,
+        imgMode === 'pixelate'
       );
       ctx.restore();
 
@@ -3454,6 +3667,17 @@ export function renderQuizFrame(
     ctx.translate(layoutQuestion.centerX + tr.offsetX, layoutQuestion.centerY + tr.offsetY);
     ctx.scale(tr.scale, tr.scale);
 
+    const fillAnswerText = (slide.options[slide.correctIndex] || slide.options[0] || '').trim();
+    const displayQText = isFillBlank
+      ? isRevealed
+        ? /_{2,}/.test(qRawText)
+          ? qRawText.replace(/_{2,}/g, `«${fillAnswerText}»`)
+          : `${qRawText} — «${fillAnswerText}»`
+        : /_{2,}/.test(qRawText)
+          ? qRawText.replace(/_{2,}/g, '[ ؟ ]')
+          : qRawText
+      : qRawText;
+
     const hasQBody = template.questionBoxOpacity > 0.01;
     if (hasQBody) {
       drawStyledBoxContainer(ctx, {
@@ -3465,8 +3689,9 @@ export function renderQuizFrame(
         fillColorHex: template.questionBoxColor,
         fillRgba: hexToRgba(template.questionBoxColor, template.questionBoxOpacity),
         opacity: template.questionBoxOpacity,
-        borderColor: template.questionBorderColor,
-        borderWidth: template.questionBorderWidth,
+        borderColor: isFillBlank && isRevealed ? template.correctColor : template.questionBorderColor,
+        borderWidth:
+          isFillBlank && isRevealed ? Math.max(5, template.questionBorderWidth) : template.questionBorderWidth,
         boxStyle,
         borderStyle,
         boxGloss: template.boxGloss,
@@ -3484,7 +3709,7 @@ export function renderQuizFrame(
       if (enhanced) {
         drawSmartQuizText(
           ctx,
-          qRawText,
+          displayQText,
           0,
           2,
           qW - qPadX * 2,
@@ -3497,7 +3722,7 @@ export function renderQuizFrame(
       }
       drawSmartQuizText(
         ctx,
-        qRawText,
+        displayQText,
         0,
         0,
         qW - qPadX * 2,
@@ -3510,6 +3735,8 @@ export function renderQuizFrame(
     } else {
       ctx.font = `800 ${qFontSize}px ${fontStack}`;
       ctx.direction = 'rtl';
+      const effectiveQLines =
+        displayQText !== qRawText ? wrapArabicText(ctx, displayQText, qW - qPadX * 2) : qLines;
       const qAlign = template.questionTextAlign || 'center';
       ctx.textAlign = qAlign;
       ctx.textBaseline = 'middle';
@@ -3519,17 +3746,17 @@ export function renderQuizFrame(
           : qAlign === 'left'
             ? -qW / 2 + qPadX
             : 0;
-      const startLineY = -((qLines.length - 1) * qLineHeight) / 2;
+      const startLineY = -((effectiveQLines.length - 1) * qLineHeight) / 2;
       if (enhanced) {
         ctx.fillStyle = isColorDark(template.questionBoxColor)
           ? 'rgba(0,0,0,0.35)'
           : 'rgba(255,255,255,0.3)';
-        qLines.forEach((line, idx) => {
+        effectiveQLines.forEach((line, idx) => {
           ctx.fillText(line, qTextDrawX, startLineY + idx * qLineHeight + 2);
         });
       }
       ctx.fillStyle = template.questionTextColor;
-      qLines.forEach((line, idx) => {
+      effectiveQLines.forEach((line, idx) => {
         ctx.fillText(line, qTextDrawX, startLineY + idx * qLineHeight);
       });
     }
@@ -3555,8 +3782,9 @@ export function renderQuizFrame(
     if (optProgress <= 0) continue;
 
     const tr = computeAnimTransform(optProgress, template.optionAnim);
-    const isCorrect = !isClues && i === slide.correctIndex;
-    const isWrongRed = !isClues && isRevealed && !isCorrect && isRedWrongMode;
+    const isCorrect = !isClues && !isStory && !isOrder && i === slide.correctIndex;
+    const isOrderRevealed = isOrder && isRevealed;
+    const isWrongRed = !isClues && !isStory && !isOrder && isRevealed && !isCorrect && isRedWrongMode;
 
     let optWindowEnd = tThinkingStart;
     for (let k = i + 1; k < optionCount; k++) {
@@ -3573,7 +3801,7 @@ export function renderQuizFrame(
 
     const { boxW, boxH, centerX, centerY } = layoutOptions.items[i];
 
-    if (isCorrect) {
+    if (isCorrect || (isOrder && i === 0)) {
       correctOriginX = centerX + tr.offsetX;
       correctOriginY = centerY + tr.offsetY;
     }
@@ -3585,7 +3813,7 @@ export function renderQuizFrame(
       finalScale *= 1.032;
     }
 
-    if (isSuspending) {
+    if (isSuspending && !isStory) {
       const pulsePhase = Math.sin(((localTime - tSuspenseStart) / 0.5) * Math.PI);
       finalScale *= 1 + 0.03 * Math.abs(pulsePhase);
     }
@@ -3593,6 +3821,10 @@ export function renderQuizFrame(
     if (isRevealed) {
       if (isClues) {
         finalAlpha *= 1 - 0.82 * clamp01(revealElapsed / 0.28);
+      } else if (isStory) {
+        finalAlpha *= 1;
+      } else if (isOrderRevealed) {
+        finalScale *= 1 + 0.025 * clamp01(revealAnim);
       } else if (isCorrect) {
         finalScale *= 1 + (isChannelLayout ? 0.06 : 0.05) * clamp01(revealAnim);
       } else if (template.revealStyle === 'dimOthers') {
@@ -3626,18 +3858,20 @@ export function renderQuizFrame(
     const borderCol =
       isRevealed && isCorrect
         ? '#FFFFFF'
-        : isWrongRed
-          ? '#FECACA'
-          : isSpokenHighlight
-            ? '#FFF3B0'
-            : isVersus
-              ? i === 0
-                ? '#F59E0B'
-                : '#38BDF8'
-              : template.optionBorderColor;
+        : isOrderRevealed
+          ? template.correctColor
+          : isWrongRed
+            ? '#FECACA'
+            : isSpokenHighlight
+              ? '#FFF3B0'
+              : isVersus
+                ? i === 0
+                  ? '#F59E0B'
+                  : '#38BDF8'
+                : template.optionBorderColor;
 
     const shouldDrawBody =
-      template.optionBoxOpacity > 0.01 || (isRevealed && (isCorrect || isWrongRed));
+      template.optionBoxOpacity > 0.01 || (isRevealed && (isCorrect || isWrongRed || isOrderRevealed));
 
     if (shouldDrawBody) {
       if (isRevealed && isCorrect) {
@@ -3677,13 +3911,13 @@ export function renderQuizFrame(
         opacity: effectiveFillOpacity,
         borderColor: borderCol,
         borderWidth:
-          isRevealed && (isCorrect || isWrongRed)
+          isRevealed && (isCorrect || isWrongRed || isOrderRevealed)
             ? Math.max(4, template.optionBorderWidth)
             : isSpokenHighlight
               ? Math.max(5, template.optionBorderWidth + 1)
               : template.optionBorderWidth,
         boxStyle,
-        borderStyle: isRevealed && (isCorrect || isWrongRed) ? 'solid' : borderStyle,
+        borderStyle: isRevealed && (isCorrect || isWrongRed || isOrderRevealed) ? 'solid' : borderStyle,
         boxGloss: template.boxGloss && !(isRevealed && (isCorrect || isWrongRed)),
         enhanced: enhanced && !(isRevealed && (isCorrect || isWrongRed)),
         shadowIntensity: isRevealed && (isCorrect || isWrongRed) ? 0.5 : shadowIntensity,
@@ -3691,21 +3925,30 @@ export function renderQuizFrame(
         isHighlighted: isSpokenHighlight,
         shadowOffsetY: 8,
         drawFill: true,
-        drawBorder: template.optionBorderWidth > 0 || isSpokenHighlight || isVersus || boxStyle === 'minimalOutline',
+        drawBorder:
+          template.optionBorderWidth > 0 ||
+          isSpokenHighlight ||
+          isVersus ||
+          isOrderRevealed ||
+          boxStyle === 'minimalOutline',
       });
     }
 
-    const labelStr = isClues
+    const labelStr = isClues || isStory
       ? String(i + 1)
-      : isTrueFalse
-        ? template.optionLabelStyle === 'none'
-          ? i === 0
-            ? '✓'
-            : '✗'
-          : getOptionBadgeLabel(i, template.optionLabelStyle)
-        : isVersus && template.optionLabelStyle === 'none'
-          ? ''
-          : getOptionBadgeLabel(i, template.optionLabelStyle);
+      : isOrder
+        ? isOrderRevealed
+          ? `#${i + 1}`
+          : '؟'
+        : isTrueFalse
+          ? template.optionLabelStyle === 'none'
+            ? i === 0
+              ? '✓'
+              : '✗'
+            : getOptionBadgeLabel(i, template.optionLabelStyle)
+          : isVersus && template.optionLabelStyle === 'none'
+            ? ''
+            : getOptionBadgeLabel(i, template.optionLabelStyle);
     const hasBadge = labelStr.length > 0;
     const badgeSize = Math.min(boxH - 26, 66);
     const isHexStyle = boxStyle === 'millionaireHex' || boxStyle === 'chamfer';
@@ -3724,30 +3967,36 @@ export function renderQuizFrame(
       ctx.fillStyle =
         isRevealed && isCorrect
           ? '#FFFFFF'
-          : isWrongRed
-            ? '#FEE2E2'
-            : isTrueFalse && template.optionLabelStyle === 'none'
-              ? i === 0
-                ? '#16a34a'
-                : '#dc2626'
-              : template.optionLabelBgColor;
+          : isOrderRevealed
+            ? template.correctColor
+            : isWrongRed
+              ? '#FEE2E2'
+              : isTrueFalse && template.optionLabelStyle === 'none'
+                ? i === 0
+                  ? '#16a34a'
+                  : '#dc2626'
+                : template.optionLabelBgColor;
       ctx.fill();
 
       ctx.font = `800 ${Math.round(badgeSize * 0.52)}px ${fontStack}`;
       ctx.fillStyle =
         isRevealed && isCorrect
           ? template.correctColor
-          : isWrongRed
-            ? wrongColor
-            : isTrueFalse && template.optionLabelStyle === 'none'
-              ? '#FFFFFF'
-              : template.optionLabelTextColor;
+          : isOrderRevealed
+            ? '#FFFFFF'
+            : isWrongRed
+              ? wrongColor
+              : isTrueFalse && template.optionLabelStyle === 'none'
+                ? '#FFFFFF'
+                : template.optionLabelTextColor;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(labelStr, badgeCenterX, 2);
     }
 
     const showCheck =
+      !isStory &&
+      !isOrder &&
       isRevealed &&
       isCorrect &&
       (template.revealStyle === 'scaleCheck' || isRedWrongMode || isTwoOptionSideBySide) &&
@@ -3802,7 +4051,11 @@ export function renderQuizFrame(
           ? `تلميح ${i + 1}`
           : isVersus
             ? `الطرف ${i + 1}`
-            : `الخيار ${i + 1}`);
+            : isOrder
+              ? `العنصر ${i + 1}`
+              : isStory
+                ? `مشهد ${i + 1}`
+                : `الخيار ${i + 1}`);
     const optHasMath = hasMathSyntax(optText);
 
     let optFontSize = isWide
@@ -3817,7 +4070,7 @@ export function renderQuizFrame(
       optFontSize = Math.round(optFontSize * 1.15);
     } else if (isVersus) {
       optFontSize = Math.round(optFontSize * (optText.length > 18 ? 0.94 : 1.08));
-    } else if (isClues) {
+    } else if (isClues || isStory || isOrder) {
       optFontSize = Math.round(optFontSize * (optText.length > 42 ? 0.8 : 0.92));
     } else if (isChannelLayout) {
       if (optText.length > 60) optFontSize = Math.round(optFontSize * 0.62);
@@ -4058,7 +4311,7 @@ export function renderQuizFrame(
   }
 
   const showTimer =
-    layoutTimer.enabled && localTime >= enterStart && localTime < timerExitEnd;
+    !isStory && layoutTimer.enabled && localTime >= enterStart && localTime < timerExitEnd;
 
   if (showTimer) {
     const isThinking = localTime >= tThinkingStart && localTime < tTimerExitStart;
@@ -4444,6 +4697,80 @@ export function renderQuizFrame(
 
   // 7.5 Channel Brand Logo / Animated Watermark & Handle
   drawBrandWatermark(ctx, template, globalTime, W, H, fontStack);
+
+  // 7.6 Kinetic Auto-Captions Overlay (Lower-third safe zone)
+  if (template.showAutoCaptions) {
+    let captionText = '';
+    if (localTime >= tQuestionStart && localTime < tOptionStarts[0]) {
+      captionText = (slide.question || '').trim();
+    } else if (!isRevealed) {
+      for (let i = optionCount - 1; i >= 0; i--) {
+        if (localTime >= tOptionStarts[i]) {
+          captionText = (slide.options[i] || '').trim();
+          break;
+        }
+      }
+      if (!captionText) captionText = (slide.question || '').trim();
+    } else {
+      captionText = isStory || isOrder
+        ? (slide.explanationText || slide.options[0] || '').trim()
+        : (slide.options[slide.correctIndex] || slide.explanationText || '').trim();
+    }
+    if (captionText) {
+      const capY = isWide ? H - 62 : H - 156;
+      const capMaxW = Math.min(W - 96, isWide ? 960 : 880);
+      const capFont = isWide ? 30 : 32;
+      ctx.save();
+      ctx.font = `800 ${capFont}px ${fontStack}`;
+      ctx.direction = 'rtl';
+      const clippedCap =
+        captionText.length > 72 ? `${captionText.slice(0, 69)}...` : captionText;
+      const capW = Math.min(capMaxW, Math.max(220, ctx.measureText(clippedCap).width + 52));
+      const capH = 56;
+      drawRoundedRect(ctx, W / 2 - capW / 2, capY - capH / 2, capW, capH, 16);
+      ctx.fillStyle = 'rgba(7, 10, 18, 0.86)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(250, 204, 21, 0.65)';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      ctx.fillStyle = '#FACC15';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(clippedCap, W / 2, capY + 1);
+      ctx.restore();
+    }
+  }
+
+  // 7.7 Persistent Engagement CTA Banner (Safe-zone above bottom margin)
+  const ctaText = (template.ctaOverlayText || '').trim();
+  if (ctaText) {
+    const ctaY = template.showAutoCaptions
+      ? isWide
+        ? H - 118
+        : H - 222
+      : isWide
+        ? H - 56
+        : H - 150;
+    const pulse = 1 + 0.02 * Math.sin(globalTime * 4.2);
+    ctx.save();
+    ctx.translate(W / 2, ctaY);
+    ctx.scale(pulse, pulse);
+    ctx.font = `800 ${isWide ? 24 : 26}px ${fontStack}`;
+    ctx.direction = 'rtl';
+    const boxW = Math.min(W - 110, Math.max(240, ctx.measureText(ctaText).width + 46));
+    const boxH = 44;
+    drawRoundedRect(ctx, -boxW / 2, -boxH / 2, boxW, boxH, 14);
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.9)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ctaText, 0, 1);
+    ctx.restore();
+  }
 
   // Collect exact stage hitboxes for interactive preview dragging (account for globalScale around H*0.52)
   const mapScaledBox = (cx: number, cy: number, bw: number, bh: number) => {

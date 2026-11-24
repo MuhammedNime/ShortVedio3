@@ -940,7 +940,7 @@ async function startServer() {
           topic?: string;
           count?: number;
           difficulty?: string;
-          contentType?: 'general' | 'math' | 'trueFalse' | 'clues' | 'versus';
+          contentType?: 'general' | 'math' | 'trueFalse' | 'clues' | 'versus' | 'order' | 'fillBlank' | 'story';
           category?: string;
           categoryHint?: string;
           avoidQuestions?: string[];
@@ -970,10 +970,16 @@ async function startServer() {
       const isTrueFalse = contentType === 'trueFalse';
       const isClues = contentType === 'clues';
       const isVersus = contentType === 'versus';
+      const isOrder = contentType === 'order';
+      const isFillBlank = contentType === 'fillBlank';
+      const isStory = contentType === 'story';
       const isMath =
         !isTrueFalse &&
         !isClues &&
         !isVersus &&
+        !isOrder &&
+        !isFillBlank &&
+        !isStory &&
         (contentType === 'math' ||
           safeCategory === 'math' ||
           /رياضيات|جبر|معادل|كسر|كسور|جذر|جذور|حساب|هندسة|مثلث|مشتق|تكامل/i.test(cleanTopic));
@@ -981,6 +987,9 @@ async function startServer() {
         !isMath &&
         !isTrueFalse &&
         !isClues &&
+        !isOrder &&
+        !isFillBlank &&
+        !isStory &&
         (safeCategory === 'discussion' ||
           /نقاش|جدل|رأي|رأيك|رايك|لو خي|لو خيروك|تفاعل|تعليقات|تفضل|موقف|اجتماعي/i.test(cleanTopic));
 
@@ -1014,8 +1023,46 @@ async function startServer() {
           : '';
       const diversityDirective = `${categoryDirective}\nزاوية التنويع المطلوبة لهذا الطلب (#${varietySeed}): ${angleHint}.${avoidBlock}`;
 
-      const promptText = isTrueFalse
-        ? `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
+      const promptText = isStory
+        ? `الفكرة أو الموضوع المطلوب تحويله إلى مشاهد فيديو قصصي / معلوماتي متحرك (بدون أسئلة مسابقات): "${cleanTopic}"
+عدد المشاهد المتسلسلة المطلوبة: ${requestCount}
+${diversityDirective}
+
+أنشئ سيناريو من ${requestCount} مشاهد متسلسلة وجذابة لفيديو شورتس قصصي / تعليمي / حقائق مدهشة باللغة العربية الفصحى السلسة.
+أرجع مصفوفة JSON فقط (JSON Array) بدون أي نص إضافي خارج JSON، بحيث يمثل كل عنصر مشهداً كاملاً ويحتوي على:
+- badgeText: عنوان المرحلة القصير (مثال: المشهد 1 · البداية، أو حقيقة مدهشة · 1)
+- question: جملة خطّافة رئيسية قصيرة ومشوقة للمشهد (Hook أو عنوان الفكرة، أقل من 14 كلمة)
+- options: مصفوفة من 3 نقاط سردية متسلسلة ومختصرة تشرح المشهد تدريجياً (كل نقطة أقل من 12 كلمة)
+- correctIndex: 0 دائماً
+- explanationText: خلاصة المشهد أو العبرة أو التشويق للمشهد التالي (أقل من 14 كلمة)`
+        : isOrder
+          ? `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
+عدد تحديات الترتيب المطلوبة: ${requestCount}
+مستوى الصعوبة: ${diffLabel}
+${diversityDirective}
+
+أنشئ ${requestCount} سؤالاً بنمط (رتّب العناصر الأربعة من الأقدم للأحدث أو من الأصغر للأكبر أو حسب التسلسل الصحيح) باللغة العربية الفصحى.
+أرجع مصفوفة JSON فقط (JSON Array) بدون أي نص إضافي خارج JSON، بحيث يحتوي كل عنصر على:
+- badgeText: عنوان قصير للشارة العلوية (مثال: رتّب التسلسل · تحدي 1)
+- question: سؤال واضح يطلب الترتيب الصحيح (مثال: رتّب هذه الأحداث من الأقدم إلى الأحدث، أقل من 14 كلمة)
+- options: مصفوفة من 4 عناصر مرتّبة بالفعل بالترتيب الصحيح من #1 إلى #4 (عبارات قصيرة واضحة)
+- correctIndex: 0 دائماً
+- explanationText: توضيح سريع للترتيب الصحيح مع التواريخ أو القيم (أقل من 14 كلمة)`
+          : isFillBlank
+            ? `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
+عدد أسئلة أكمل الفراغ المطلوبة: ${requestCount}
+مستوى الصعوبة: ${diffLabel}
+${diversityDirective}
+
+أنشئ ${requestCount} سؤالاً بنمط (أكمل الفراغ) باللغة العربية الفصحى السلسة والمناسبة لفيديوهات الشورتس.
+أرجع مصفوفة JSON فقط (JSON Array) بدون أي نص إضافي خارج JSON، بحيث يحتوي كل عنصر على:
+- badgeText: عنوان قصير للشارة العلوية (مثال: أكمل الفراغ · سؤال 1)
+- question: جملة واضحة تحتوي على علامة الفراغ ____ مكان الكلمة المفقودة (مثال: أطول نهر في قارة أفريقيا هو نهر ____ ، أقل من 15 كلمة)
+- options: مصفوفة من 4 كلمات/خيارات قصيرة بالضبط (واحدة منها تكمل الفراغ بدقة)
+- correctIndex: رقم صحيح من 0 إلى 3 يمثل الخيار الصحيح الذي يملأ الفراغ
+- explanationText: معلومة سريعة عن الإجابة الصحيحة (أقل من 12 كلمة)`
+            : isTrueFalse
+              ? `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
 عدد الأسئلة المطلوبة: ${requestCount}
 مستوى الصعوبة: ${diffLabel}
 ${diversityDirective}
@@ -1027,8 +1074,8 @@ ${diversityDirective}
 - options: مصفوفة تحتوي خيارين بالضبط هما ["صح", "خطأ"]
 - correctIndex: 0 إذا كانت العبارة صحيحة، أو 1 إذا كانت خاطئة (نوّع بين 0 و 1)
 - explanationText: تصحيح أو توضيح قصير جداً (أقل من 12 كلمة)`
-        : isClues
-          ? `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
+              : isClues
+                ? `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
 عدد الألغاز المطلوبة: ${requestCount}
 مستوى الصعوبة: ${diffLabel}
 ${diversityDirective}
@@ -1044,8 +1091,8 @@ ${diversityDirective}
   * العنصر [3]: الإجابة الصحيحة النهائية (كلمة أو كلمتان فقط، بدون شرح)
 - correctIndex: دائماً الرقم 3
 - explanationText: حقيقة سريعة ومدهشة عن الإجابة (أقل من 12 كلمة)`
-          : isVersus
-            ? `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
+                : isVersus
+                  ? `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
 عدد المقارنات المطلوبة: ${requestCount}
 مستوى الصعوبة: ${diffLabel}
 ${discussionGuidelines}
@@ -1058,7 +1105,7 @@ ${diversityDirective}
 - options: مصفوفة تحتوي اسمَي الطرفين المتنافسين بالضبط (اسمان قصيران واضحان، مثل ["المشتري", "زحل"])
 - correctIndex: 0 إذا كان الطرف الأول هو الصحيح/الأقوى/الأكثر اختياراً، أو 1 إذا كان الطرف الثاني (نوّع بين 0 و 1)
 - explanationText: معلومة رقمية أو سبب سريع للفوز أو دعوة للنقاش (أقل من 12 كلمة)`
-            : `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
+                  : `الموضوع أو الفكرة المطلوبة: "${cleanTopic}"
 عدد الأسئلة المطلوبة: ${requestCount}
 مستوى الصعوبة: ${diffLabel}
 ${mathGuidelines}
@@ -1081,8 +1128,9 @@ ${diversityDirective}
         explanationText?: string;
       };
 
-      const quizSystemInstruction =
-        'أنت خبير في إعداد أسئلة المسابقات والنقاشات التفاعلية والتحديات والرياضيات لفيديوهات يوتيوب باللغة العربية. التزم بالدقة والابتكار وتجنب تكرار الأسئلة المستهلكة والاختصار الواضح.';
+      const quizSystemInstruction = isStory
+        ? 'أنت مخرج وكاتب سيناريو محترف لفيديوهات الشورتس القصصية والتعليمية العربية المتحركة. اكتب مشاهد متسلسلة وجذابة بصياغة بصرية مركزة ومختصرة.'
+        : 'أنت خبير في إعداد أسئلة المسابقات والنقاشات التفاعلية والتحديات والرياضيات لفيديوهات يوتيوب باللغة العربية. التزم بالدقة والابتكار وتجنب تكرار الأسئلة المستهلكة والاختصار الواضح.';
 
       const externalQuizPrompt = `${promptText}
 
@@ -1099,7 +1147,7 @@ ${diversityDirective}
   ]
 }`;
 
-      const minOpts = isTrueFalse || isVersus ? 2 : 4;
+      const minOpts = isTrueFalse || isVersus ? 2 : isStory ? 2 : 4;
 
       const { data: normalized, provider: usedProvider, model: usedModel } =
         await runTextJsonAcrossProviders({
@@ -1128,12 +1176,12 @@ ${diversityDirective}
                       },
                       question: {
                         type: Type.STRING,
-                        description: 'نص السؤال باللغة العربية واضح ومختصر',
+                        description: 'نص السؤال أو العنوان باللغة العربية واضح ومختصر',
                       },
                       options: {
                         type: Type.ARRAY,
                         items: { type: Type.STRING },
-                        description: 'مصفوفة الخيارات أو التلميحات أو طرفي المقارنة',
+                        description: 'مصفوفة الخيارات أو التلميحات أو نقاط المشهد',
                       },
                       correctIndex: {
                         type: Type.INTEGER,
@@ -1141,7 +1189,7 @@ ${diversityDirective}
                       },
                       explanationText: {
                         type: Type.STRING,
-                        description: 'توضيح مختصر جداً للإجابة الصحيحة',
+                        description: 'توضيح أو خلاصة مختصرة جداً',
                       },
                     },
                     required: ['badgeText', 'question', 'options', 'correctIndex', 'explanationText'],
@@ -1191,6 +1239,45 @@ ${diversityDirective}
             const chosenRaw = [...uniqueCandidates, ...fallbackCandidates].slice(0, safeCount);
 
             const items = chosenRaw.map((item, idx) => {
+                if (isStory) {
+                  const cleanedOpts = (item.options || []).map((o) => String(o).trim()).filter(Boolean);
+                  const opts: [string, string, string, string] = [
+                    cleanedOpts[0] || 'نقطة رئيسية في المشهد',
+                    cleanedOpts[1] || '',
+                    cleanedOpts[2] || '',
+                    cleanedOpts[3] || '',
+                  ];
+                  return {
+                    id: `ai-slide-${Date.now()}-${idx}`,
+                    slideType: 'story' as const,
+                    category: safeCategory,
+                    badgeText: (item.badgeText ?? `المشهد ${idx + 1}`).trim(),
+                    question: item.question!.trim(),
+                    options: opts,
+                    correctIndex: 0 as const,
+                    explanationText: (item.explanationText ?? '').trim(),
+                  };
+                }
+
+                if (isOrder) {
+                  const opts = item.options!.slice(0, 4).map((o) => String(o).trim()) as [
+                    string,
+                    string,
+                    string,
+                    string,
+                  ];
+                  return {
+                    id: `ai-slide-${Date.now()}-${idx}`,
+                    slideType: 'order' as const,
+                    category: safeCategory,
+                    badgeText: (item.badgeText ?? `رتّب التسلسل · ${idx + 1}`).trim(),
+                    question: item.question!.trim(),
+                    options: opts,
+                    correctIndex: 0 as const,
+                    explanationText: (item.explanationText ?? '').trim(),
+                  };
+                }
+
                 if (isTrueFalse) {
                   const rawIdx = Number(item.correctIndex);
                   const cIdx = (rawIdx === 1 ? 1 : 0) as 0 | 1;
@@ -1257,7 +1344,7 @@ ${diversityDirective}
                 ) as 0 | 1 | 2 | 3;
                 return {
                   id: `ai-slide-${Date.now()}-${idx}`,
-                  slideType: 'multiple' as const,
+                  slideType: isFillBlank ? ('fillBlank' as const) : ('multiple' as const),
                   category: safeCategory,
                   badgeText: (item.badgeText ?? `السؤال ${idx + 1}`).trim(),
                   question: item.question!.trim(),
@@ -1374,6 +1461,279 @@ ${prevTopics ? `المحاور المقترحة مسبقاً: ${prevTopics}` : '
     }
   });
 
+  // Generate Multi-Character 3D Story Cinema Script (Scenes & Dialogue Lines)
+  app.post('/api/ai/generate-story', async (req, res) => {
+    try {
+      const { topic, tone, sceneCount, characters, locations } = req.body as {
+        topic?: string;
+        tone?: string;
+        sceneCount?: number;
+        characters?: Array<{ id?: string; name?: string; roleTitle?: string }>;
+        locations?: Array<{ id?: string; label?: string; subtitle?: string }>;
+      };
+
+      const cleanTopic = (topic ?? '').trim();
+      if (!cleanTopic) {
+        res.status(400).json({ error: 'يرجى كتابة موضوع القصة أو الحوار أولاً.' });
+        return;
+      }
+
+      const safeScenesCount = Math.max(2, Math.min(6, Math.round(Number(sceneCount) || 3)));
+      const safeTone = (tone ?? '').trim() || 'قصة إسلامية هادفة';
+
+      const defaultChars = [
+        { id: 'wise_narrator', name: 'الراوي الحكيم', roleTitle: 'راوي القصة' },
+        { id: 'elder_scholar', name: 'الشيخ أبو الفضل', roleTitle: 'عالم وتاجر أمين' },
+        { id: 'honest_merchant', name: 'طارق الأمين', roleTitle: 'الشاب التاجر الصادق' },
+        { id: 'young_seeker', name: 'زيد المتعلم', roleTitle: 'باحث عن الحكمة' },
+      ];
+      const safeChars =
+        Array.isArray(characters) && characters.length > 0
+          ? characters
+              .filter((c) => c && typeof c.id === 'string' && c.id.trim())
+              .map((c) => ({
+                id: String(c.id).trim(),
+                name: String(c.name || c.id).trim(),
+                roleTitle: String(c.roleTitle || 'شخصية').trim(),
+              }))
+          : defaultChars;
+
+      const defaultLocs = [
+        { id: 'loc_ancient_souq', label: 'سوق المدينة والميزان', subtitle: 'سوق تراثي' },
+        { id: 'loc_historic_mosque', label: 'رحاب المسجد التراثي', subtitle: 'صحن مسجد' },
+        { id: 'loc_scholar_majlis', label: 'مجلس العلم والمخطوطات', subtitle: 'مكتبة تراثية' },
+        { id: 'loc_desert_caravan', label: 'الواحة والقافلة ليلاً', subtitle: 'صحراء مضاءة بالنجوم' },
+        { id: 'loc_modern_studio', label: 'استوديو الحوار الحديث', subtitle: 'حوار معاصر' },
+      ];
+      const safeLocs =
+        Array.isArray(locations) && locations.length > 0
+          ? locations
+              .filter((l) => l && typeof l.id === 'string' && l.id.trim())
+              .map((l) => ({
+                id: String(l.id).trim(),
+                label: String(l.label || l.id).trim(),
+                subtitle: String(l.subtitle || '').trim(),
+              }))
+          : defaultLocs;
+
+      const charIds = safeChars.map((c) => c.id);
+      const locIds = safeLocs.map((l) => l.id);
+
+      const promptText = `الموضوع المطلوب تحويله إلى قصة مصورة متحركة متعددة الشخصيات: "${cleanTopic}"
+الأسلوب الدرامي المطلوب: ${safeTone}
+عدد المشاهد المطلوبة: ${safeScenesCount} مشاهد
+
+الشخصيات المتاحة (استخدم فقط المعرّفات التالية في characterIds و speakerId):
+${safeChars.map((c) => `- id: "${c.id}" | الاسم: ${c.name} (${c.roleTitle})`).join('\n')}
+
+الأماكن المتاحة (استخدم فقط المعرّفات التالية في locationId):
+${safeLocs.map((l) => `- id: "${l.id}" | المكان: ${l.label}${l.subtitle ? ` (${l.subtitle})` : ''}`).join('\n')}
+
+قواعد التأليف الإلزامية:
+1. ممنوع وضع أي أسئلة مسابقات أو خيارات A/B/C/D؛ هذا فيديو سينمائي قصصي حواري بالكامل.
+2. قسّم القصة إلى ${safeScenesCount} مشاهد مترابطة (تمهيد -> حوار وتطور -> ذروة وعبرة مؤثرة).
+3. في كل مشهد ضع سطرين إلى 3 أسطر حوار قصيرة وقوية باللغة العربية الفصحى المؤثرة (كل سطر بين 8 و 22 كلمة ليناسب الدبلجة الصوتية السريعة والواضحة في الشورتس).
+4. اختر لكل مشهد أنسب locationId، وحركة كاميرا (zoomIn | zoomOut | panLeft | panRight | breathing)، وجو مؤثرات (goldenDust | lanternGlow | starlight | rain | none).
+5. في كل سطر حوار حدد:
+   - speakerId من قائمة الشخصيات أعلاه
+   - position: ("right" أو "left" أو "center") بحيث يتوزع المتحاورون بذكاء على الشاشة
+   - expression: ("calm" أو "happy" أو "serious" أو "surprised")
+6. أرجع JSON Object صالح فقط وفق المخطط المحدد.`;
+
+      const storySysInst =
+        'أنت مخرج وكاتب سيناريو محترف لأفلام الشورتس القصصية الإسلامية والتربوية 3D. تكتب حوارات عربية مؤثرة ومركزة تناسب الإلقاء الصوتي المباشر.';
+
+      const validMotions = ['zoomIn', 'zoomOut', 'panLeft', 'panRight', 'breathing'] as const;
+      const validAtmospheres = ['none', 'goldenDust', 'starlight', 'lanternGlow', 'rain'] as const;
+      const validPositions = ['left', 'center', 'right'] as const;
+      const validExpressions = ['calm', 'happy', 'serious', 'surprised'] as const;
+      const validTransitions = ['fade', 'zoomFade', 'wipeGold'] as const;
+
+      const { data: storyPayload, provider } = await runTextJsonAcrossProviders({
+        geminiTask: async (ai, model) => {
+          const response = await ai.models.generateContent({
+            model,
+            contents: promptText,
+            config: {
+              temperature: 0.92,
+              thinkingConfig: {
+                thinkingLevel:
+                  model === 'gemini-3.1-flash-lite'
+                    ? ThinkingLevel.MINIMAL
+                    : ThinkingLevel.LOW,
+              },
+              systemInstruction: storySysInst,
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  storyTitle: { type: Type.STRING },
+                  endMoralTitle: { type: Type.STRING },
+                  endMoralSubtitle: { type: Type.STRING },
+                  scenes: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        title: { type: Type.STRING },
+                        locationId: { type: Type.STRING },
+                        cameraMotion: { type: Type.STRING },
+                        atmosphere: { type: Type.STRING },
+                        sceneBannerText: { type: Type.STRING },
+                        characterIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        lines: {
+                          type: Type.ARRAY,
+                          items: {
+                            type: Type.OBJECT,
+                            properties: {
+                              speakerId: { type: Type.STRING },
+                              position: { type: Type.STRING },
+                              expression: { type: Type.STRING },
+                              text: { type: Type.STRING },
+                            },
+                            required: ['speakerId', 'position', 'expression', 'text'],
+                          },
+                        },
+                      },
+                      required: ['title', 'locationId', 'characterIds', 'lines'],
+                    },
+                  },
+                },
+                required: ['storyTitle', 'endMoralTitle', 'endMoralSubtitle', 'scenes'],
+              },
+            },
+          });
+          return response.text ?? '{}';
+        },
+        externalSystemInstruction: storySysInst,
+        externalUserPrompt: `${promptText}\n\nأرجع JSON Object يحتوي على storyTitle, endMoralTitle, endMoralSubtitle, scenes.`,
+        parseAndValidate: (payload) => {
+          const obj = (payload && typeof payload === 'object' ? payload : {}) as {
+            storyTitle?: unknown;
+            endMoralTitle?: unknown;
+            endMoralSubtitle?: unknown;
+            scenes?: unknown;
+          };
+          const rawScenes = Array.isArray(obj.scenes) ? obj.scenes : [];
+          if (rawScenes.length === 0) {
+            throw new Error('لم يُرجع الذكاء الاصطناعي مشاهد صالحة.');
+          }
+          const stamp = Date.now();
+          const scenes = rawScenes.slice(0, 6).map((scRaw, sIdx) => {
+            const sc = (scRaw && typeof scRaw === 'object' ? scRaw : {}) as Record<string, unknown>;
+            const rawLoc = typeof sc.locationId === 'string' ? sc.locationId.trim() : '';
+            const locationId = locIds.includes(rawLoc)
+              ? rawLoc
+              : locIds[sIdx % locIds.length];
+
+            const rawCharIds = Array.isArray(sc.characterIds)
+              ? sc.characterIds
+                  .map((id) => (typeof id === 'string' ? id.trim() : ''))
+                  .filter((id) => charIds.includes(id))
+              : [];
+
+            const rawLines = Array.isArray(sc.lines) ? sc.lines : [];
+            const lines = rawLines
+              .map((lnRaw, lIdx) => {
+                const ln = (lnRaw && typeof lnRaw === 'object' ? lnRaw : {}) as Record<
+                  string,
+                  unknown
+                >;
+                const text = typeof ln.text === 'string' ? ln.text.trim() : '';
+                if (!text) return null;
+                const spRaw = typeof ln.speakerId === 'string' ? ln.speakerId.trim() : '';
+                const speakerId = charIds.includes(spRaw)
+                  ? spRaw
+                  : rawCharIds[lIdx % Math.max(1, rawCharIds.length)] ?? charIds[0];
+                const posRaw = typeof ln.position === 'string' ? ln.position.trim() : '';
+                const position = (validPositions as readonly string[]).includes(posRaw)
+                  ? (posRaw as 'left' | 'center' | 'right')
+                  : (validPositions[lIdx % 3] as 'left' | 'center' | 'right');
+                const expRaw = typeof ln.expression === 'string' ? ln.expression.trim() : '';
+                const expression = (validExpressions as readonly string[]).includes(expRaw)
+                  ? (expRaw as 'calm' | 'happy' | 'serious' | 'surprised')
+                  : 'calm';
+                return {
+                  id: `ai-line-${stamp}-${sIdx}-${lIdx}`,
+                  speakerId,
+                  position,
+                  expression,
+                  text,
+                };
+              })
+              .filter((x): x is NonNullable<typeof x> => x !== null);
+
+            if (lines.length === 0) {
+              lines.push({
+                id: `ai-line-${stamp}-${sIdx}-0`,
+                speakerId: charIds[0],
+                position: 'center',
+                expression: 'calm',
+                text: cleanTopic,
+              });
+            }
+
+            const castSet = new Set(rawCharIds);
+            for (const l of lines) {
+              if (castSet.size < 3) castSet.add(l.speakerId);
+            }
+            const finalCast = Array.from(castSet).slice(0, 3);
+
+            const motRaw = typeof sc.cameraMotion === 'string' ? sc.cameraMotion.trim() : '';
+            const atmRaw = typeof sc.atmosphere === 'string' ? sc.atmosphere.trim() : '';
+            return {
+              id: `ai-scene-${stamp}-${sIdx}`,
+              title:
+                typeof sc.title === 'string' && sc.title.trim()
+                  ? sc.title.trim()
+                  : `المشهد ${sIdx + 1}`,
+              locationId,
+              cameraMotion: (validMotions as readonly string[]).includes(motRaw)
+                ? motRaw
+                : validMotions[sIdx % validMotions.length],
+              atmosphere: (validAtmospheres as readonly string[]).includes(atmRaw)
+                ? atmRaw
+                : 'goldenDust',
+              sceneBannerText:
+                typeof sc.sceneBannerText === 'string' && sc.sceneBannerText.trim()
+                  ? sc.sceneBannerText.trim()
+                  : typeof sc.title === 'string' && sc.title.trim()
+                    ? sc.title.trim()
+                    : `المشهد ${sIdx + 1}`,
+              characterIds: finalCast.length > 0 ? finalCast : [charIds[0]],
+              transition: validTransitions[sIdx % validTransitions.length],
+              lines,
+            };
+          });
+
+          return {
+            storyTitle:
+              typeof obj.storyTitle === 'string' && obj.storyTitle.trim()
+                ? obj.storyTitle.trim()
+                : cleanTopic.slice(0, 60),
+            endMoralTitle:
+              typeof obj.endMoralTitle === 'string' && obj.endMoralTitle.trim()
+                ? obj.endMoralTitle.trim()
+                : 'القيمُ الصادقةُ ترفعُ صاحبها في الدنيا والآخرة',
+            endMoralSubtitle:
+              typeof obj.endMoralSubtitle === 'string' && obj.endMoralSubtitle.trim()
+                ? obj.endMoralSubtitle.trim()
+                : 'شاركنا رأيك في التعليقات واشترك لمزيد من القصص الهادفة',
+            scenes,
+          };
+        },
+      });
+
+      res.json({ ...storyPayload, provider });
+    } catch (err) {
+      const formatted = formatGeminiError(err, 'text');
+      res.status(formatted.status).json({
+        error: formatted.message,
+        quotaExhausted: formatted.quotaExhausted,
+      });
+    }
+  });
+
   // Generate Arabic TTS Voiceover WAV via Gemini 3.8 Flash Lite TTS
   app.post('/api/ai/tts', async (req, res) => {
     try {
@@ -1478,7 +1838,7 @@ ${prevTopics ? `المحاور المقترحة مسبقاً: ${prevTopics}` : '
   // Generate AI YouTube Publishing Kit (Title, Description, Hashtags, Tags, Pinned Comment)
   app.post('/api/ai/generate-publish-kit', async (req, res) => {
     try {
-      const { questions, aspectRatio, hookText } = req.body as {
+      const { questions, aspectRatio, hookText, mode } = req.body as {
         questions?: Array<{
           question?: string;
           options?: string[];
@@ -1487,17 +1847,19 @@ ${prevTopics ? `المحاور المقترحة مسبقاً: ${prevTopics}` : '
         }>;
         aspectRatio?: '9:16' | '16:9';
         hookText?: string;
+        mode?: 'quiz' | 'story';
       };
 
       const validQuestions = Array.isArray(questions)
         ? questions.filter((q) => (q?.question ?? '').trim().length > 0).slice(0, 15)
         : [];
       if (validQuestions.length === 0) {
-        res.status(400).json({ error: 'لا توجد أسئلة لتوليد بيانات النشر لها.' });
+        res.status(400).json({ error: 'لا توجد محتويات صالحة لتوليد بيانات النشر.' });
         return;
       }
 
       const isShorts = aspectRatio !== '16:9';
+      const isStoryKit = mode === 'story';
       const summaryLines = validQuestions
         .map((q, i) => {
           const opts = Array.isArray(q.options) ? q.options.filter(Boolean).join(' / ') : '';
@@ -1505,7 +1867,18 @@ ${prevTopics ? `المحاور المقترحة مسبقاً: ${prevTopics}` : '
         })
         .join('\n');
 
-      const promptText = `لدينا فيديو مسابقة أسئلة باللغة العربية بصيغة ${isShorts ? 'YouTube Shorts (عمودي 9:16)' : 'YouTube أفقي (16:9)'}.
+      const promptText = isStoryKit
+        ? `لدينا فيديو قصة وحوار سينمائي 3D هادف باللغة العربية بصيغة ${isShorts ? 'YouTube Shorts (عمودي 9:16)' : 'YouTube أفقي (16:9)'}.
+${hookText?.trim() ? `عنوان القصة: ${hookText.trim()}\n` : ''}مشاهد وحوارات القصة:
+${summaryLines}
+
+المطلوب إنشاء حزمة نشر يوتيوب احترافية وجذابة باللغة العربية، بصيغة JSON فقط تحتوي الحقول التالية:
+- title: عنوان درامي مشوق يثير الفضول للعبرة (أقل من 65 حرفاً${isShorts ? '، مع إضافة #Shorts في نهايته' : ''})
+- description: وصف متكامل يبرز قيمة القصة ويدعو للاشتراك والتعليق، مع الهاشتاغات المناسبة في نهايته
+- hashtags: مصفوفة من 5 إلى 8 هاشتاغات عربية وإنجليزية مناسبة مثل #قصص #حكمة #تربية #شورتس
+- tags: مصفوفة من 8 إلى 12 كلمة مفتاحية قوية للبحث بدون علامة #
+- pinnedComment: تعليق تفاعلي قصير ومؤثر يدعو المشاهد لمشاركة العبرة أو رأيه في القصة`
+        : `لدينا فيديو مسابقة أسئلة باللغة العربية بصيغة ${isShorts ? 'YouTube Shorts (عمودي 9:16)' : 'YouTube أفقي (16:9)'}.
 ${hookText?.trim() ? `عبارة البداية (Hook): ${hookText.trim()}\n` : ''}الأسئلة الموجودة في الفيديو:
 ${summaryLines}
 
@@ -1654,9 +2027,11 @@ ${summaryLines}
 
     const rawAppRedirect =
       typeof req.query.appRedirect === 'string' ? req.query.appRedirect.trim() : '';
-    const appRedirect = rawAppRedirect.startsWith('com.shortsquiz.studio0://youtube-auth')
-      ? rawAppRedirect
-      : '';
+    const appRedirect =
+      rawAppRedirect.startsWith('com.shortsquiz.studiopro://youtube-auth') ||
+      rawAppRedirect.startsWith('com.shortsquiz.studio0://youtube-auth')
+        ? rawAppRedirect
+        : '';
 
     const statePayload = Buffer.from(
       JSON.stringify({
@@ -1699,7 +2074,8 @@ ${summaryLines}
         }
         if (
           decoded.appRedirect &&
-          decoded.appRedirect.startsWith('com.shortsquiz.studio0://youtube-auth')
+          (decoded.appRedirect.startsWith('com.shortsquiz.studiopro://youtube-auth') ||
+            decoded.appRedirect.startsWith('com.shortsquiz.studio0://youtube-auth'))
         ) {
           appRedirect = decoded.appRedirect;
         }

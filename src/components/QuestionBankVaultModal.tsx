@@ -103,6 +103,9 @@ const SLIDE_TYPE_LABELS: Record<SlideType, string> = {
   trueFalse: 'صح أم خطأ',
   clues: '3 تلميحات',
   versus: 'مقارنة VS',
+  order: 'رتّب التسلسل',
+  fillBlank: 'أكمل الفراغ',
+  story: 'مشهد قصصي',
 };
 
 const FOLDER_EMOJIS = ['📁', '🕌', '📖', '🌙', '⭐', '🧮', '📐', '🔬', '🪐', '🌍', '⚽', '🏛️', '💻', '📚', '💬', '💡'];
@@ -479,6 +482,18 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
       setErrorNotice('يرجى تعبئة الخيارات الأربعة لسؤال الاختيار من متعدد.');
       return;
     }
+    if (manualSlideType === 'fillBlank' && opts.some((o) => !o)) {
+      setErrorNotice('يرجى تعبئة الكلمة الصحيحة والبدائل الأربعة.');
+      return;
+    }
+    if (manualSlideType === 'order' && opts.some((o) => !o)) {
+      setErrorNotice('يرجى تعبئة العناصر الأربعة بالترتيب الصحيح.');
+      return;
+    }
+    if (manualSlideType === 'story' && !opts[0]) {
+      setErrorNotice('يرجى كتابة نقطة سردية واحدة على الأقل للمشهد.');
+      return;
+    }
     if (manualSlideType === 'clues' && (!opts[0] || !opts[1] || !opts[2] || !opts[3])) {
       setErrorNotice('يرجى تعبئة التلميحات الثلاثة مع الجواب النهائي.');
       return;
@@ -490,7 +505,12 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
     const res = await addManualQuestionToBank({
       question: cleanQ,
       options: opts,
-      correctIndex: manualSlideType === 'clues' ? 3 : manualCorrectIndex,
+      correctIndex:
+        manualSlideType === 'clues'
+          ? 3
+          : manualSlideType === 'order' || manualSlideType === 'story'
+            ? 0
+            : manualCorrectIndex,
       slideType: manualSlideType,
       category: manualCategory,
       badgeText: manualBadge.trim() || undefined,
@@ -564,11 +584,17 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
     const targetFolder = aiFolderId || (selectedFolderId !== 'all' && selectedFolderId !== 'unfiled' ? selectedFolderId : undefined);
     const fPath = targetFolder ? buildFolderBreadcrumb(targetFolder, folders) : '';
     const catMeta = QUIZ_CATEGORIES.find((c) => c.id === aiCategory) ?? QUIZ_CATEGORIES[0];
-    const modeMap: Record<SlideType, 'general' | 'math' | 'trueFalse' | 'clues' | 'versus'> = {
+    const modeMap: Record<
+      SlideType,
+      'general' | 'math' | 'trueFalse' | 'clues' | 'versus' | 'order' | 'fillBlank' | 'story'
+    > = {
       multiple: aiCategory === 'math' ? 'math' : 'general',
       trueFalse: 'trueFalse',
       clues: 'clues',
       versus: 'versus',
+      order: 'order',
+      fillBlank: 'fillBlank',
+      story: 'story',
     };
 
     let savedTotal = 0;
@@ -688,6 +714,73 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
     } finally {
       setWorkingItemId(null);
     }
+  };
+
+  const insertBankItemsBatch = async (
+    items: BankQuestionItem[],
+    mode: 'append' | 'replace',
+    workingKey: string
+  ) => {
+    if (items.length === 0 || workingItemId) return;
+    setWorkingItemId(workingKey);
+    setErrorNotice('');
+    setNotice('');
+    try {
+      try {
+        soundEngine.getContext();
+      } catch {
+        // ignore
+      }
+
+      const slidesToInsert: QuestionSlide[] = [];
+      let warningMsg: string | undefined;
+
+      for (let i = 0; i < items.length; i++) {
+        let slide = bankItemToQuestionSlide(items[i]);
+        if (withVoiceOnInsert && !warningMsg) {
+          setNotice(`جارٍ توليد الصوت للسؤال ${i + 1} من ${items.length}...`);
+          const res = await generateSlideVoiceoverSafe(slide, voiceName, voiceModeOnInsert);
+          slide = res.slide;
+          if (res.warning) {
+            warningMsg = res.warning;
+          }
+        }
+        slidesToInsert.push(slide);
+      }
+
+      const ids = items.map((it) => it.id);
+      await markBankQuestionsUsed(ids, true);
+      if (cloudUser) {
+        for (const id of ids) {
+          void updateCloudBankQuestionUsed(id, true).catch(() => {});
+        }
+      }
+      setSelectedQuestionIds(new Set());
+      await loadAllData();
+
+      const applyMath = items.some((it) => it.category === 'math') && autoApplyMathTheme;
+      onInsertSlides(slidesToInsert, mode, withVoiceOnInsert, warningMsg, applyMath);
+      onClose();
+    } finally {
+      setWorkingItemId(null);
+    }
+  };
+
+  const handleQuickPrepUnused = async (count: 5 | 10) => {
+    const pool = filteredItems.filter((i) => !i.usedInVideo);
+    if (pool.length === 0) {
+      setErrorNotice('لا توجد أسئلة جديدة (غير مستخدمة) ضمن المجلد والفلتر الحالي.');
+      return;
+    }
+    const picked = pool.slice(0, count);
+    await insertBankItemsBatch(picked, 'append', `quick-${count}`);
+  };
+
+  const handleBulkConvertSelected = async (mode: 'append' | 'replace') => {
+    if (selectedQuestionIds.size === 0 || workingItemId) return;
+    const chosen = filteredItems.filter((i) => selectedQuestionIds.has(i.id));
+    if (chosen.length === 0) return;
+    await insertBankItemsBatch(chosen, mode, `bulk-${mode}`);
   };
 
   const handlePickRandomUnused = async () => {
@@ -1130,9 +1223,29 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
 
             <button
               type="button"
+              onClick={() => void handleQuickPrepUnused(5)}
+              disabled={Boolean(workingItemId)}
+              title="سحب 5 أسئلة غير مستخدمة من الفلتر الحالي وتحويلها للفيديو"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--panel)] border border-[#00B050]/50 hover:border-[#00B050] text-[#00B050] dark:text-[#6ee7b7] text-[11px] font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            >
+              <span>تجهيز سريع (5)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void handleQuickPrepUnused(10)}
+              disabled={Boolean(workingItemId)}
+              title="سحب 10 أسئلة غير مستخدمة من الفلتر الحالي وتحويلها للفيديو"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--panel)] border border-[var(--gold)]/55 hover:border-[var(--gold)] text-[var(--gold)] text-[11px] font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+            >
+              <span>تجهيز (10)</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => void handlePickRandomUnused()}
               disabled={Boolean(workingItemId)}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#00B050] hover:bg-[#00c85b] text-white text-[11px] font-bold cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#00B050] hover:bg-[#00c85b] text-white text-[11px] font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
             >
               <Shuffle className="w-3.5 h-3.5" />
               <span>سحب عشوائي للفيديو</span>
@@ -1454,6 +1567,9 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                   <option value="trueFalse">صح أم خطأ</option>
                   <option value="clues">3 تلميحات</option>
                   <option value="versus">مقارنة VS</option>
+                  <option value="order">رتّب التسلسل</option>
+                  <option value="fillBlank">أكمل الفراغ</option>
+                  <option value="story">مشهد قصصي</option>
                 </select>
 
                 <select
@@ -1546,6 +1662,9 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                       <option value="trueFalse">صح أم خطأ</option>
                       <option value="clues">3 تلميحات + الحل</option>
                       <option value="versus">مقارنة VS</option>
+                      <option value="order">رتّب التسلسل</option>
+                      <option value="fillBlank">أكمل الفراغ</option>
+                      <option value="story">مشهد قصصي</option>
                     </select>
                   </div>
 
@@ -1658,32 +1777,49 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                           [manualOpt2, setManualOpt2],
                           [manualOpt3, setManualOpt3],
                         ] as const
-                      ).map(([val, setter], idx) => (
-                        <div
-                          key={idx}
-                          className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${
-                            manualCorrectIndex === idx
-                              ? 'bg-[#00B050]/12 border-[#00B050]/55'
-                              : 'bg-[var(--panel)] border-[var(--pline)]'
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name="manual-correct"
-                            checked={manualCorrectIndex === idx}
-                            onChange={() => setManualCorrectIndex(idx as 0 | 1 | 2 | 3)}
-                            title="تحديد كإجابة صحيحة"
-                            className="accent-[#00B050] cursor-pointer"
-                          />
-                          <input
-                            type="text"
-                            value={val}
-                            onChange={(e) => setter(e.target.value)}
-                            placeholder={`الخيار ${idx + 1}${manualCorrectIndex === idx ? ' (الصحيح)' : ''}`}
-                            className="flex-1 bg-transparent text-xs focus:outline-none"
-                          />
-                        </div>
-                      ))}
+                      ).map(([val, setter], idx) => {
+                        const seqOnly = manualSlideType === 'order' || manualSlideType === 'story';
+                        return (
+                          <div
+                            key={idx}
+                            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${
+                              !seqOnly && manualCorrectIndex === idx
+                                ? 'bg-[#00B050]/12 border-[#00B050]/55'
+                                : 'bg-[var(--panel)] border-[var(--pline)]'
+                            }`}
+                          >
+                            {seqOnly ? (
+                              <span className="text-[10px] font-bold text-[var(--gold)] shrink-0">
+                                {manualSlideType === 'order' ? `#${idx + 1}` : `نقطة ${idx + 1}`}
+                              </span>
+                            ) : (
+                              <input
+                                type="radio"
+                                name="manual-correct"
+                                checked={manualCorrectIndex === idx}
+                                onChange={() => setManualCorrectIndex(idx as 0 | 1 | 2 | 3)}
+                                title="تحديد كإجابة صحيحة"
+                                className="accent-[#00B050] cursor-pointer"
+                              />
+                            )}
+                            <input
+                              type="text"
+                              value={val}
+                              onChange={(e) => setter(e.target.value)}
+                              placeholder={
+                                manualSlideType === 'order'
+                                  ? `الخطوة ${idx + 1} بالترتيب الصحيح`
+                                  : manualSlideType === 'story'
+                                    ? `نقطة السرد ${idx + 1}${idx > 0 ? ' (اختياري)' : ''}`
+                                    : `${manualSlideType === 'fillBlank' ? 'كلمة' : 'الخيار'} ${idx + 1}${
+                                        manualCorrectIndex === idx ? ' (الصحيح)' : ''
+                                      }`
+                              }
+                              className="flex-1 bg-transparent text-xs focus:outline-none"
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
@@ -1768,6 +1904,9 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                       <option value="trueFalse">صح أم خطأ</option>
                       <option value="clues">3 تلميحات</option>
                       <option value="versus">مقارنة VS</option>
+                      <option value="order">رتّب التسلسل</option>
+                      <option value="fillBlank">أكمل الفراغ</option>
+                      <option value="story">مشهد قصصي</option>
                     </select>
                   </div>
                   <textarea
@@ -1845,6 +1984,9 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                       <option value="trueFalse">صح أم خطأ</option>
                       <option value="clues">3 تلميحات</option>
                       <option value="versus">مقارنة VS</option>
+                      <option value="order">رتّب التسلسل</option>
+                      <option value="fillBlank">أكمل الفراغ</option>
+                      <option value="story">مشهد قصصي</option>
                     </select>
                     <select
                       value={aiDifficulty}
@@ -1918,13 +2060,30 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                 </div>
               )}
 
-              {/* Bulk Selection / Move Bar */}
+              {/* Bulk Selection / Convert to Video / Move Bar */}
               {selectedQuestionIds.size > 0 && (
                 <div className="sticky top-0 z-10 p-2.5 rounded-xl bg-[var(--panel)] border border-[#00B050] shadow-lg flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-extrabold text-[#00B050] dark:text-[#6ee7b7]">
                     محدد: {selectedQuestionIds.size} سؤال
                   </span>
                   <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={Boolean(workingItemId)}
+                      onClick={() => void handleBulkConvertSelected('append')}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#00B050] hover:bg-[#00c85b] text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      <Play className="w-3 h-3 fill-current" />
+                      <span>تحويل المحدد للفيديو</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={Boolean(workingItemId)}
+                      onClick={() => void handleBulkConvertSelected('replace')}
+                      className="px-2.5 py-1 rounded-lg bg-[var(--surface)] border border-[var(--gold)]/60 hover:border-[var(--gold)] text-[var(--gold)] text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      فيديو جديد بالمحدد
+                    </button>
                     <select
                       value={bulkMoveTargetFolderId}
                       onChange={(e) => setBulkMoveTargetFolderId(e.target.value)}
@@ -1940,7 +2099,7 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                     <button
                       type="button"
                       onClick={() => void handleBulkMoveSelected()}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#00B050] text-white text-[11px] font-bold cursor-pointer"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--surface)] border border-[#00B050]/50 text-[#00B050] dark:text-[#6ee7b7] text-[11px] font-bold cursor-pointer"
                     >
                       <FolderInput className="w-3.5 h-3.5" />
                       <span>نقل المحدد</span>
@@ -2224,8 +2383,11 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                                     : Boolean(o)
                                 )
                                 .map((opt, idx) => {
+                                  const isSeq =
+                                    item.slideType === 'order' || item.slideType === 'story';
                                   const isCorrect =
-                                    item.slideType === 'clues' ? idx === 3 : idx === item.correctIndex;
+                                    !isSeq &&
+                                    (item.slideType === 'clues' ? idx === 3 : idx === item.correctIndex);
                                   return (
                                     <div
                                       key={idx}
@@ -2235,7 +2397,13 @@ export const QuestionBankVaultModal: React.FC<QuestionBankVaultModalProps> = ({
                                           : 'bg-[var(--panel)] border-[var(--pline)] text-[var(--pmuted)]'
                                       }`}
                                     >
-                                      {isCorrect ? '✓ ' : ''}
+                                      {isCorrect
+                                        ? '✓ '
+                                        : item.slideType === 'order'
+                                          ? `#${idx + 1} `
+                                          : item.slideType === 'story'
+                                            ? '• '
+                                            : ''}
                                       {opt}
                                     </div>
                                   );

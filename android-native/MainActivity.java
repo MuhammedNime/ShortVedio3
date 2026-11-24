@@ -1,4 +1,4 @@
-package com.shortsquiz.studio0;
+package com.shortsquiz.studiopro;
 
 import android.Manifest;
 import android.content.ContentResolver;
@@ -243,7 +243,8 @@ public class MainActivity extends BridgeActivity {
         if (intent == null) return;
         Uri data = intent.getData();
         if (data == null) return;
-        if ("com.shortsquiz.studio0".equals(data.getScheme())
+        if (("com.shortsquiz.studiopro".equals(data.getScheme())
+                || "com.shortsquiz.studio0".equals(data.getScheme()))
                 && "youtube-auth".equals(data.getHost())) {
             pendingYouTubeAuthUrl = data.toString();
             flushPendingYouTubeAuth();
